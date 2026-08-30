@@ -13,16 +13,21 @@ import { createDeepAgent } from 'deepagents';
  * hands are the DAG.
  */
 export function createAgentRunner({ model, mcpServers = {}, onTool = null, signal = null }) {
-  if (!model?.baseUrl || !model?.name) {
-    throw new Error('gateway model not configured: set GATEWAY_MODEL_BASE_URL and GATEWAY_MODEL_NAME');
+  // The manager sends `{ baseUrl, model, apiKey }` per run (active profile);
+  // the local config fallback uses `name`. Normalize both.
+  const baseUrl = model?.baseUrl ?? null;
+  const modelName = model?.model ?? model?.name ?? null;
+  const apiKey = model?.apiKey ?? null;
+  if (!baseUrl || !modelName) {
+    throw new Error('gateway model not configured: the run must carry baseUrl and model (or set them in mcp.config.json)');
   }
   const tools = loadMcpTools(mcpServers);
 
   return {
     async run({ objective, operation, capability }) {
       const agent = createDeepAgent({
-        model: model.name,
-        modelConfig: { baseUrl: model.baseUrl, ...(model.apiKey ? { apiKey: model.apiKey } : {}) },
+        model: modelName,
+        modelConfig: { baseUrl, ...(apiKey ? { apiKey } : {}) },
         tools,
       });
       const input = [

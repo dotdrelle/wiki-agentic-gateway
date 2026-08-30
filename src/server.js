@@ -19,8 +19,8 @@ const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 export function startGateway({
   port = 7789,
   config,
-  createRunner = (run) => createAgentRunner({
-    model: config.model,
+  createRunner = (run, model) => createAgentRunner({
+    model,
     mcpServers: config.mcpServers,
     signal: run.controller.signal,
     onTool: (event) => emit(run, mapToolEvent(event)),
@@ -79,11 +79,12 @@ export function startGateway({
         if (run.status === 'cancelled') return;
         run.status = 'running';
       }
-      const runner = createRunner(run);
+      const runner = createRunner(run, request.model ?? config.model);
       const result = await runner.run({
         objective: request.objective ?? request.input ?? null,
         operation,
         capability: request.capability ?? null,
+        model: request.model ?? config.model,
       });
       run.result = { status: 'completed', content: result };
       run.status = 'completed';

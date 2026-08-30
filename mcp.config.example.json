@@ -36,6 +36,7 @@
     }
   },
   "model": {
+    "_comment": "Fallback only: the manager sends the active profile's model with every run (/config use is followed automatically). Values here apply when a run carries none.",
     "baseUrl": "http://host.docker.internal:11434/v1",
     "name": "qwen3:14b"
   }

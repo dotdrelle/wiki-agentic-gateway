@@ -14,10 +14,14 @@ const DEFAULT_CAPABILITIES = [
  * Gateway configuration.
  *
  * Capabilities come from `mcp.config.json` (`capabilities` key) or, when
- * absent, from the single default `agent.review` above. The model comes from
- * the environment — OpenAI-compatible, like every other surface of the
- * product. The MCP pool (read tools only: wiki, optional web search, optional
- * mail) is declared in the same file and handed to the agent runner.
+ * absent, from the single default `agent.review` above.
+ *
+ * The `model` section here is a FALLBACK only: the manager sends the active
+ * profile's model (baseUrl + model + apiKey) with every `POST /runs`, so the
+ * gateway always follows the workspace's default LLM or the one selected with
+ * `/config use` — no sync, no restart. The MCP pool (read tools only: wiki,
+ * optional web search, optional mail) is declared in the same file and handed
+ * to the agent runner.
  */
 export function loadGatewayConfig({
   configDir = process.cwd(),
