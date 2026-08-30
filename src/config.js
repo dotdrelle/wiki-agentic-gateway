@@ -11,37 +11,45 @@ const DEFAULT_CAPABILITIES = [
 ];
 
 /**
- * Gateway configuration.
+ * Gateway configuration — ONE file, shared with the manager.
  *
- * Capabilities come from `mcp.config.json` (`capabilities` key) or, when
- * absent, from the single default `agent.review` above.
+ * The gateway mounts the manager's `agent-runtimes.json` read-only and serves
+ * the capabilities of ITS OWN entry (id from `GATEWAY_RUNTIME_ID`, default
+ * `deepagents`). Nothing else is configured here:
  *
- * There is NO model configuration here: the manager sends the active
- * profile's model (baseUrl + model + apiKey) with every `POST /runs`, so the
- * gateway always follows the workspace's default LLM or the one selected with
- * `/config use` — same model as the manager itself. The MCP pool (read tools
- * only: wiki, optional web search, optional mail) is declared in the same
- * file and handed to the agent runner.
+ * - the model travels with every run (the manager sends the active profile's
+ *   model, same LLM as the manager itself);
+ * - the MCP pool will do the same: workspace-scoped endpoints are per-run by
+ *   nature, so a static pool file can never be right.
+ *
+ * A missing file, or no matching entry, degrades to the single default
+ * `agent.review` above.
  */
 export function loadGatewayConfig({
   configDir = process.env.GATEWAY_CONFIG_DIR ?? process.cwd(),
   env = process.env,
 } = {}) {
-  const file = join(configDir, 'mcp.config.json');
-  let declared = {};
+  const runtimeId = String(env.GATEWAY_RUNTIME_ID ?? 'deepagents');
+  const file = join(configDir, 'agent-runtimes.json');
+  let entries = [];
   if (existsSync(file)) {
     try {
-      declared = JSON.parse(readFileSync(file, 'utf8'));
+      const raw = JSON.parse(readFileSync(file, 'utf8'));
+      entries = Array.isArray(raw)
+        ? raw
+        : (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw.runtimes ?? [] : []);
     } catch (error) {
-      console.warn(`mcp.config.json unreadable: ${error.message}`);
+      console.warn(`agent-runtimes.json unreadable: ${error.message}`);
     }
   }
+  const entry = entries.find((item) => item?.id === runtimeId)
+    ?? entries.find((item) => item?.type === 'deepagents')
+    ?? null;
   return {
-    version: declared.version ?? '0.15.66',
-    capabilities: Array.isArray(declared.capabilities) && declared.capabilities.length > 0
-      ? declared.capabilities
+    version: String(env.GATEWAY_VERSION ?? '0.15.66'),
+    capabilities: Array.isArray(entry?.capabilities) && entry.capabilities.length > 0
+      ? entry.capabilities
       : DEFAULT_CAPABILITIES,
-    mcpServers: declared.mcpServers ?? {},
     authToken: String(env.GATEWAY_AUTH_TOKEN ?? '').trim() || null,
   };
 }
