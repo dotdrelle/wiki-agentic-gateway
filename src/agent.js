@@ -22,7 +22,7 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
   }
   const tools = loadMcpTools(mcpServers);
 
-  async function resolveChatModel() {
+  async function resolveChatModel({ withSampling = true } = {}) {
     const slash = rawName.indexOf('/');
     const provider = slash > 0 ? rawName.slice(0, slash) : (process.env.GATEWAY_MODEL_PROVIDER ?? 'openai');
     // Keep the FULL model id: OpenAI-compatible endpoints like albert expose
@@ -31,19 +31,22 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
     const params = { modelProvider: provider };
     if (apiKey) params.apiKey = apiKey;
     if (baseUrl) params.configuration = { baseURL: baseUrl };
-    // Forward the numeric parameters the workspace profile declared — never
-    // hardcode a sampling value the workspace did not configure.
-    for (const key of ['temperature', 'maxTokens', 'topP', 'seed']) {
-      const value = Number(model?.[key]);
-      if (Number.isFinite(value)) params[key] = value;
+    // Forward the parameters the workspace profile declared — never hardcode
+    // a sampling value the workspace did not configure.
+    if (withSampling) {
+      for (const key of ['temperature', 'topP', 'seed']) {
+        const value = Number(model?.[key]);
+        if (Number.isFinite(value)) params[key] = value;
+      }
     }
+    const maxTokens = Number(model?.maxTokens);
+    if (Number.isFinite(maxTokens)) params.maxTokens = maxTokens;
+    if (typeof model?.reasoningEffort === 'string' && model.reasoningEffort) params.reasoningEffort = model.reasoningEffort;
     return initChatModel(rawName, params);
   }
 
   return {
     async run({ objective, operation, capability, language }) {
-      const chatModel = await resolveChatModel();
-      const agent = createDeepAgent({ model: chatModel, tools });
       const input = [
         `Capability: ${capability ?? 'unknown'}`,
         `Operation: ${operation ?? 'run'}`,
@@ -51,10 +54,28 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
         '',
         `Objective: ${objective ?? ''}`,
       ].join('\n');
-      const events = await agent.invoke(
-        { messages: [{ role: 'user', content: input }] },
-        { signal: signal ?? undefined },
-      );
+      const invoke = (chatModel) => {
+        const agent = createDeepAgent({ model: chatModel, tools });
+        return agent.invoke(
+          { messages: [{ role: 'user', content: input }] },
+          { signal: signal ?? undefined },
+        );
+      };
+      let events;
+      try {
+        events = await invoke(await resolveChatModel({ withSampling: true }));
+      } catch (error) {
+        // Some models refuse sampling parameters (gpt-5 refuses `temperature`;
+        // reasoning models expect `thinking` instead). The provider's
+        // rejection IS the rule: retry once without the sampling params,
+        // leaving the reasoning budget to the model's own defaults.
+        const message = error instanceof Error ? error.message : String(error);
+        if (/temperature|sampling|unsupported value|thinking/i.test(message)) {
+          events = await invoke(await resolveChatModel({ withSampling: false }));
+        } else {
+          throw error;
+        }
+      }
       onTool?.({ name: 'agent', done: true });
       const last = [...(events?.messages ?? [])].reverse().find((message) => message?.content);
       return String(last?.content ?? '');
