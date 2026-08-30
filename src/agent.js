@@ -25,8 +25,10 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
   async function resolveChatModel() {
     const slash = rawName.indexOf('/');
     const provider = slash > 0 ? rawName.slice(0, slash) : (process.env.GATEWAY_MODEL_PROVIDER ?? 'openai');
-    const name = slash > 0 ? rawName.slice(slash + 1) : rawName;
-    return initChatModel(name, {
+    // Keep the FULL model id: OpenAI-compatible endpoints like albert expose
+    // ids WITH the provider prefix ("openai/gpt-oss-120b" is the id itself).
+    // The prefix only tells us which LangChain adapter to instantiate.
+    return initChatModel(rawName, {
       modelProvider: provider,
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { configuration: { baseURL: baseUrl } } : {}),

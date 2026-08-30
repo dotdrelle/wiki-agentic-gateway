@@ -19,12 +19,7 @@ const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 export function startGateway({
   port = 7789,
   config,
-  createRunner = (run, model) => createAgentRunner({
-    model,
-    mcpServers: config.mcpServers,
-    signal: run.controller.signal,
-    onTool: (event) => emit(run, mapToolEvent(event)),
-  }),
+  createRunner = null,
   now = () => new Date(),
 } = {}) {
   const runs = new Map();
@@ -56,6 +51,16 @@ export function startGateway({
     return (config?.capabilities ?? []).find((capability) => capability.name === name) ?? null;
   }
 
+  // Resolved in the BODY, not as a default parameter: default initializers
+  // evaluate in the parameter scope, which does not see `emit` — the closure
+  // crashed with "emit is not defined" on the first tool callback.
+  const resolveRunner = createRunner ?? ((run, model) => createAgentRunner({
+    model,
+    mcpServers: config.mcpServers,
+    signal: run.controller.signal,
+    onTool: (event) => emit(run, mapToolEvent(event)),
+  }));
+
   async function executeRun(run, request) {
     const capability = capabilityFor(String(request.capability ?? ''));
     const operation = String(request.operation ?? 'run');
@@ -86,7 +91,7 @@ export function startGateway({
         emit(run, { type: 'run_failed', error: run.error });
         return;
       }
-      const runner = createRunner(run, runModel);
+      const runner = resolveRunner(run, runModel);
       const result = await runner.run({
         objective: request.objective ?? request.input ?? null,
         operation,
