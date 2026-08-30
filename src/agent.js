@@ -28,11 +28,16 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
     // Keep the FULL model id: OpenAI-compatible endpoints like albert expose
     // ids WITH the provider prefix ("openai/gpt-oss-120b" is the id itself).
     // The prefix only tells us which LangChain adapter to instantiate.
-    return initChatModel(rawName, {
-      modelProvider: provider,
-      ...(apiKey ? { apiKey } : {}),
-      ...(baseUrl ? { configuration: { baseURL: baseUrl } } : {}),
-    });
+    const params = { modelProvider: provider };
+    if (apiKey) params.apiKey = apiKey;
+    if (baseUrl) params.configuration = { baseURL: baseUrl };
+    // Forward the numeric parameters the workspace profile declared — never
+    // hardcode a sampling value the workspace did not configure.
+    for (const key of ['temperature', 'maxTokens', 'topP', 'seed']) {
+      const value = Number(model?.[key]);
+      if (Number.isFinite(value)) params[key] = value;
+    }
+    return initChatModel(rawName, params);
   }
 
   return {
