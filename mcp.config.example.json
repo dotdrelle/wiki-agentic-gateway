@@ -24,15 +24,6 @@
     }
   ],
   "mcpServers": {
-    "_comment": "The runtime's MCP pool — eyes and a mouth only. Read tools (wiki) plus scoped, approval-gated tools (mail). Never expose workspace write paths here: the hands are the DAG.",
-    "wiki": {
-      "url": "http://host.docker.internal:3335/mcp/",
-      "tools": ["wiki_search_context", "wiki_read_page"]
-    },
-    "mailer": {
-      "url": "http://host.docker.internal:3339/mcp/",
-      "tools": ["mailer_send_email"],
-      "approvalGated": true
-    }
+    "_comment": "The runtime's MCP pool — eyes and a mouth only. Read tools (wiki) plus scoped, approval-gated tools (mail). NOT wired yet: loadMcpTools in src/agent.js is a stub, so this section is inert. When wired, endpoints must come from the real deployment, never from an example."
   }
 }
