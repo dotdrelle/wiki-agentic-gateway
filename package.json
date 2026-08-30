@@ -1,0 +1,23 @@
+{
+  "name": "@dotdrelle/wiki-agentic-gateway",
+  "version": "0.15.66",
+  "description": "External agentic runtime gateway (Deep Agents) implementing the Wiki Manager RuntimeProvider contract over HTTP.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "bin": {
+    "wiki-agentic-gateway": "bin/wiki-agentic-gateway.js"
+  },
+  "scripts": {
+    "start": "node ./bin/wiki-agentic-gateway.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "deepagents": "^1.13.2"
+  },
+  "files": [
+    "bin",
+    "src"
+  ]
+}

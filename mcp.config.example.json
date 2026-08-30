@@ -1,0 +1,42 @@
+{
+  "version": "0.15.66",
+  "capabilities": [
+    {
+      "name": "agent.review",
+      "operations": ["run"],
+      "description": "Read-only audit of a wiki workspace: compare source documents against the existing concept pages, identify missing or under-covered classes, and produce a structured gap report. No mutation.",
+      "aliases": ["audit", "review", "analyze", "compare", "check"]
+    },
+    {
+      "name": "agent.plan",
+      "operations": ["plan", "run"],
+      "description": "Given an analysis, propose a deterministic DAG plan (ingest, build, sync) as a validated fragment. The 'plan' operation only reports the proposal; 'run' integrates it and waits for human approval.",
+      "aliases": ["plan", "propose"],
+      "aliasOperations": { "plan": "plan", "propose": "plan", "apply": "run", "execute": "run" },
+      "defaultRequiresApproval": true
+    },
+    {
+      "name": "agent.notify",
+      "operations": ["run"],
+      "description": "Read the workspace profile for the notification recipient, then send the report by email. Mutation, approval required.",
+      "aliases": ["notify", "send", "email", "report"],
+      "defaultRequiresApproval": true
+    }
+  ],
+  "mcpServers": {
+    "_comment": "The runtime's MCP pool — eyes and a mouth only. Read tools (wiki) plus scoped, approval-gated tools (mail). Never expose workspace write paths here: the hands are the DAG.",
+    "wiki": {
+      "url": "http://host.docker.internal:3335/mcp/",
+      "tools": ["wiki_search_context", "wiki_read_page"]
+    },
+    "mailer": {
+      "url": "http://host.docker.internal:3339/mcp/",
+      "tools": ["mailer_send_email"],
+      "approvalGated": true
+    }
+  },
+  "model": {
+    "baseUrl": "http://host.docker.internal:11434/v1",
+    "name": "qwen3:14b"
+  }
+}
