@@ -104,6 +104,8 @@ export function startGateway({
       }
       run.status = 'failed';
       run.error = error instanceof Error ? error.message : String(error);
+      // The operator watches this console: say WHY, like the manager does.
+      console.error(`run ${run.runId} failed: ${run.error}`);
       emit(run, { type: 'run_failed', error: run.error });
     }
   }
