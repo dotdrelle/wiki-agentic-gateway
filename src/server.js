@@ -97,6 +97,7 @@ export function startGateway({
         operation,
         capability: request.capability ?? null,
         language: request.language ?? null,
+        mcp: request.mcp ?? [],
       });
       const content = typeof output === 'string' ? output : (output?.content ?? '');
       run.result = {

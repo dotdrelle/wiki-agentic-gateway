@@ -1,18 +1,7 @@
 import { createDeepAgent } from 'deepagents';
 import { initChatModel } from 'langchain/chat_models/universal';
+import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 
-/**
- * Agent runner — the single integration point with the Deep Agents SDK.
- *
- * The manager never sees this module: it talks to the HTTP contract in
- * server.js. Everything here can be swapped for another engine without the
- * manager noticing.
- *
- * The model comes from the RUN (the manager sends the active profile's model,
- * `openai/…`-style names included). initChatModel needs an explicit provider
- * for our OpenAI-compatible endpoints, so the `provider/name` prefix is split
- * and passed as `modelProvider` + `configuration.baseURL`.
- */
 // Module-level memory: a model that refused sampling parameters once is not
 // asked again during this process lifetime — one wasted call per model, not
 // per run. Provider-driven, no hardcoded model list.
@@ -25,7 +14,6 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
   if (!baseUrl || !rawName) {
     throw new Error('the run must carry baseUrl and model (sent by the manager)');
   }
-  const tools = loadMcpTools(mcpServers);
 
   async function resolveChatModel() {
     const slash = rawName.indexOf('/');
@@ -52,6 +40,7 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
 
   return {
     async run({ objective, operation, capability, language }) {
+      const tools = await loadMcpTools(mcpServers);
       const input = [
         `Capability: ${capability ?? 'unknown'}`,
         `Operation: ${operation ?? 'run'}`,
@@ -97,12 +86,31 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
   };
 }
 
-// MCP tool loading stub — wire the pool here (langchain-mcp-adapters or
-// equivalent). Read-only servers only.
-function loadMcpTools(mcpServers) {
-  const names = Object.keys(mcpServers ?? {});
-  if (names.length > 0) {
-    console.warn(`MCP pool declared but tool loading is not wired yet: ${names.join(', ')}`);
+// The runtime's EYES, per run: the manager sends the active workspace's wiki
+// MCP endpoint with its curated read tools. Workspace-scoped endpoints are
+// per-run by nature — nothing static here, and nothing outside the declared
+// allow-list is exposed. The connection stays alive for the run (the tools
+// hold it), so the client is deliberately not closed.
+async function loadMcpTools(servers) {
+  const connections = {};
+  const declared = new Set();
+  for (const server of servers ?? []) {
+    if (!server?.url) continue;
+    const name = String(server.name ?? `server-${Object.keys(connections).length + 1}`);
+    connections[name] = {
+      transport: String(server.transport ?? 'http'),
+      url: String(server.url),
+      ...(server.headers && typeof server.headers === 'object' ? { headers: server.headers } : {}),
+    };
+    for (const toolName of server.tools ?? []) declared.add(String(toolName));
   }
-  return [];
+  if (Object.keys(connections).length === 0) return [];
+  const client = new MultiServerMCPClient(connections);
+  const tools = await client.getTools();
+  if (declared.size === 0) return tools;
+  return tools.filter((tool) => {
+    const name = String(tool.name ?? '');
+    const bare = name.includes('__') ? name.slice(name.indexOf('__') + 2) : name;
+    return declared.has(name) || declared.has(bare);
+  });
 }
