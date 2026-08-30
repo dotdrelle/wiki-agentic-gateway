@@ -39,7 +39,7 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
   }
 
   return {
-    async run({ objective, operation, capability, language }) {
+    async run({ objective, operation, capability, language, systemPrompt }) {
       const tools = await loadMcpTools(mcpServers);
       const input = [
         `Capability: ${capability ?? 'unknown'}`,
@@ -49,7 +49,14 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
         `Objective: ${objective ?? ''}`,
       ].join('\n');
       const invoke = (chatModel) => {
-        const agent = createDeepAgent({ model: chatModel, tools });
+        const agent = createDeepAgent({
+          model: chatModel,
+          tools,
+          // The manager's per-run system prompt (role, capability, boundary,
+          // profile). Without it, deepagents uses its generic assistant
+          // prompt — the "upload your project" hallucination.
+          ...(systemPrompt ? { systemPrompt } : {}),
+        });
         return agent.invoke(
           { messages: [{ role: 'user', content: input }] },
           { signal: signal ?? undefined },
