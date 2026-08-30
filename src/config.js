@@ -24,7 +24,7 @@ const DEFAULT_CAPABILITIES = [
  * to the agent runner.
  */
 export function loadGatewayConfig({
-  configDir = process.cwd(),
+  configDir = process.env.GATEWAY_CONFIG_DIR ?? process.cwd(),
   env = process.env,
 } = {}) {
   const file = join(configDir, 'mcp.config.json');
