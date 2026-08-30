@@ -13,6 +13,11 @@ import { initChatModel } from 'langchain/chat_models/universal';
  * for our OpenAI-compatible endpoints, so the `provider/name` prefix is split
  * and passed as `modelProvider` + `configuration.baseURL`.
  */
+// Module-level memory: a model that refused sampling parameters once is not
+// asked again during this process lifetime — one wasted call per model, not
+// per run. Provider-driven, no hardcoded model list.
+const samplingRefusedByModel = new Set();
+
 export function createAgentRunner({ model, mcpServers = {}, onTool = null, signal = null }) {
   const baseUrl = model?.baseUrl ?? null;
   const rawName = model?.model ?? model?.name ?? null;
@@ -22,7 +27,7 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
   }
   const tools = loadMcpTools(mcpServers);
 
-  async function resolveChatModel({ withSampling = true } = {}) {
+  async function resolveChatModel() {
     const slash = rawName.indexOf('/');
     const provider = slash > 0 ? rawName.slice(0, slash) : (process.env.GATEWAY_MODEL_PROVIDER ?? 'openai');
     // Keep the FULL model id: OpenAI-compatible endpoints like albert expose
@@ -33,7 +38,7 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
     if (baseUrl) params.configuration = { baseURL: baseUrl };
     // Forward the parameters the workspace profile declared — never hardcode
     // a sampling value the workspace did not configure.
-    if (withSampling) {
+    if (!samplingRefusedByModel.has(rawName)) {
       for (const key of ['temperature', 'topP', 'seed']) {
         const value = Number(model?.[key]);
         if (Number.isFinite(value)) params[key] = value;
@@ -63,15 +68,16 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
       };
       let events;
       try {
-        events = await invoke(await resolveChatModel({ withSampling: true }));
+        events = await invoke(await resolveChatModel());
       } catch (error) {
         // Some models refuse sampling parameters (gpt-5 refuses `temperature`;
         // reasoning models expect `thinking` instead). The provider's
-        // rejection IS the rule: retry once without the sampling params,
-        // leaving the reasoning budget to the model's own defaults.
+        // rejection IS the rule: remember it for this model and retry once
+        // without the sampling params.
         const message = error instanceof Error ? error.message : String(error);
         if (/temperature|sampling|unsupported value|thinking/i.test(message)) {
-          events = await invoke(await resolveChatModel({ withSampling: false }));
+          samplingRefusedByModel.add(rawName);
+          events = await invoke(await resolveChatModel());
         } else {
           throw error;
         }
