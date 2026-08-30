@@ -96,6 +96,7 @@ export function startGateway({
         objective: request.objective ?? request.input ?? null,
         operation,
         capability: request.capability ?? null,
+        language: request.language ?? null,
       });
       run.result = { status: 'completed', content: result };
       run.status = 'completed';

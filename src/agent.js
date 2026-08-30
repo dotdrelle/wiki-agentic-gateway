@@ -36,12 +36,13 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
   }
 
   return {
-    async run({ objective, operation, capability }) {
+    async run({ objective, operation, capability, language }) {
       const chatModel = await resolveChatModel();
       const agent = createDeepAgent({ model: chatModel, tools });
       const input = [
         `Capability: ${capability ?? 'unknown'}`,
         `Operation: ${operation ?? 'run'}`,
+        ...(language ? [`Reply in the workspace language: ${language}`] : []),
         '',
         `Objective: ${objective ?? ''}`,
       ].join('\n');
