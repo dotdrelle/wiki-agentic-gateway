@@ -92,15 +92,22 @@ export function startGateway({
         return;
       }
       const runner = resolveRunner(run, runModel);
-      const result = await runner.run({
+      const output = await runner.run({
         objective: request.objective ?? request.input ?? null,
         operation,
         capability: request.capability ?? null,
         language: request.language ?? null,
       });
-      run.result = { status: 'completed', content: result };
+      const content = typeof output === 'string' ? output : (output?.content ?? '');
+      run.result = {
+        status: 'completed',
+        content,
+        ...(Array.isArray(output?.refusedParams) && output.refusedParams.length > 0
+          ? { refusedParams: output.refusedParams }
+          : {}),
+      };
       run.status = 'completed';
-      emit(run, { type: 'message', content: result });
+      emit(run, { type: 'message', content });
       emit(run, { type: 'run_completed' });
     } catch (error) {
       if (error?.name === 'AbortError' || run.aborted) {

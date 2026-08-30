@@ -67,16 +67,21 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
         );
       };
       let events;
+      const refusedParams = [];
       try {
         events = await invoke(await resolveChatModel());
       } catch (error) {
         // Some models refuse sampling parameters (gpt-5 refuses `temperature`;
         // reasoning models expect `thinking` instead). The provider's
-        // rejection IS the rule: remember it for this model and retry once
-        // without the sampling params.
+        // rejection IS the rule: remember it for this model, retry once
+        // without the sampling params, and REPORT the refused params back to
+        // the manager so the workspace config can be corrected.
         const message = error instanceof Error ? error.message : String(error);
         if (/temperature|sampling|unsupported value|thinking/i.test(message)) {
           samplingRefusedByModel.add(rawName);
+          for (const key of ['temperature', 'topP', 'seed']) {
+            if (Number.isFinite(Number(model?.[key]))) refusedParams.push(key);
+          }
           events = await invoke(await resolveChatModel());
         } else {
           throw error;
@@ -84,7 +89,10 @@ export function createAgentRunner({ model, mcpServers = {}, onTool = null, signa
       }
       onTool?.({ name: 'agent', done: true });
       const last = [...(events?.messages ?? [])].reverse().find((message) => message?.content);
-      return String(last?.content ?? '');
+      return {
+        content: String(last?.content ?? ''),
+        ...(refusedParams.length > 0 ? { refusedParams } : {}),
+      };
     },
   };
 }
