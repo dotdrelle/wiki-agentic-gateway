@@ -51,5 +51,9 @@ The runtime has **eyes, ideas and a mouth** — but no hands on the workspace:
   (`planExpansionRequest` in the run result) that the manager integrates into
   its DAG under approval.
 
-`mcp.config.json` declares the pool and the capabilities; `src/agent.js` is the
-single Deep Agents integration point; `src/server.js` owns the HTTP contract.
+There is **no capabilities file of its own**: the gateway mounts the
+manager's `agent-runtimes.json` (read-only) and serves the capabilities of its
+own entry — one file, two readers. The model comes per run from the manager,
+and so will the MCP pool (workspace-scoped endpoints are per-run by nature).
+`src/agent.js` is the single Deep Agents integration point; `src/server.js`
+owns the HTTP contract.

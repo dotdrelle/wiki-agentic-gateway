@@ -30,8 +30,7 @@ Eyes, ideas and a mouth — no hands:
 bin/wiki-agentic-gateway.js   CLI entry (port 7789 by default)
 src/server.js                 HTTP contract (7 routes), in-memory runs, SSE
 src/agent.js                  Deep Agents integration (single point)
-src/config.js                 capabilities + model + pool (mcp.config.json / env)
-mcp.config.example.json       pool + capabilities declaration
+src/config.js                 capabilities from the manager's agent-runtimes.json (own entry), token from env
 ```
 
 ## Version
