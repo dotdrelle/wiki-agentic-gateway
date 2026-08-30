@@ -79,12 +79,18 @@ export function startGateway({
         if (run.status === 'cancelled') return;
         run.status = 'running';
       }
-      const runner = createRunner(run, request.model ?? config.model);
+      const runModel = request.model ?? null;
+      if (!runModel?.baseUrl || !(runModel.model || runModel.name)) {
+        run.status = 'failed';
+        run.error = 'no model: the manager must send the active profile model with every run';
+        emit(run, { type: 'run_failed', error: run.error });
+        return;
+      }
+      const runner = createRunner(run, runModel);
       const result = await runner.run({
         objective: request.objective ?? request.input ?? null,
         operation,
         capability: request.capability ?? null,
-        model: request.model ?? config.model,
       });
       run.result = { status: 'completed', content: result };
       run.status = 'completed';
@@ -103,6 +109,9 @@ export function startGateway({
   }
 
   const server = createServer((request, response) => {
+    if (!authorized(request, config?.authToken)) {
+      return sendJson(response, 401, { error: 'Unauthorized' });
+    }
     const url = new URL(request.url ?? '/', 'http://gateway.local');
     const path = url.pathname;
     const runMatch = /^\/runs\/([^/]+)(\/(cancel|approve|events))?$/.exec(path);
@@ -189,6 +198,15 @@ export function startGateway({
 
 function mapToolEvent(event) {
   return { type: event.done ? 'tool_finished' : 'tool_started', tool: event.name ?? 'agent' };
+}
+
+// When a token is configured, every route requires it — including /health,
+// mirroring the manager's own runtime (7788). No token configured = no auth
+// (dev mode).
+function authorized(request, token) {
+  if (!token) return true;
+  const header = String(request.headers.authorization ?? '');
+  return header === `Bearer ${token}`;
 }
 
 function sendJson(response, status, payload) {

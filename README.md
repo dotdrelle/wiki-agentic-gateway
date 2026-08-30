@@ -21,10 +21,15 @@ GET  /runs/:id/events   → SSE `data: {json}\n\n`, replay then live
 
 ```bash
 npm install
-GATEWAY_MODEL_BASE_URL=http://…/v1 GATEWAY_MODEL_NAME=… node bin/wiki-agentic-gateway.js
+node bin/wiki-agentic-gateway.js        # GATEWAY_PORT (7789), GATEWAY_AUTH_TOKEN
 ```
 
 or via Docker: `dotdrelle/wiki-agentic-gateway` (port 7789).
+
+There is **no model configuration here**: the manager sends its active
+profile's model (baseUrl + model + apiKey) with every run — same LLM as the
+manager itself, following `/config use` automatically. A run without a model
+fails explicitly.
 
 Then declare it in the manager's `agent-runtimes.json`:
 

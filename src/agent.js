@@ -13,13 +13,13 @@ import { createDeepAgent } from 'deepagents';
  * hands are the DAG.
  */
 export function createAgentRunner({ model, mcpServers = {}, onTool = null, signal = null }) {
-  // The manager sends `{ baseUrl, model, apiKey }` per run (active profile);
-  // the local config fallback uses `name`. Normalize both.
+  // The model comes from the RUN: the manager sends the active profile's
+  // model (same as the manager's own LLM). There is no local model config.
   const baseUrl = model?.baseUrl ?? null;
   const modelName = model?.model ?? model?.name ?? null;
   const apiKey = model?.apiKey ?? null;
   if (!baseUrl || !modelName) {
-    throw new Error('gateway model not configured: the run must carry baseUrl and model (or set them in mcp.config.json)');
+    throw new Error('the run must carry baseUrl and model (sent by the manager)');
   }
   const tools = loadMcpTools(mcpServers);
 

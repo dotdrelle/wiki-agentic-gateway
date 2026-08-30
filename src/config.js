@@ -16,12 +16,12 @@ const DEFAULT_CAPABILITIES = [
  * Capabilities come from `mcp.config.json` (`capabilities` key) or, when
  * absent, from the single default `agent.review` above.
  *
- * The `model` section here is a FALLBACK only: the manager sends the active
+ * There is NO model configuration here: the manager sends the active
  * profile's model (baseUrl + model + apiKey) with every `POST /runs`, so the
  * gateway always follows the workspace's default LLM or the one selected with
- * `/config use` — no sync, no restart. The MCP pool (read tools only: wiki,
- * optional web search, optional mail) is declared in the same file and handed
- * to the agent runner.
+ * `/config use` — same model as the manager itself. The MCP pool (read tools
+ * only: wiki, optional web search, optional mail) is declared in the same
+ * file and handed to the agent runner.
  */
 export function loadGatewayConfig({
   configDir = process.env.GATEWAY_CONFIG_DIR ?? process.cwd(),
@@ -42,10 +42,6 @@ export function loadGatewayConfig({
       ? declared.capabilities
       : DEFAULT_CAPABILITIES,
     mcpServers: declared.mcpServers ?? {},
-    model: {
-      baseUrl: env.GATEWAY_MODEL_BASE_URL ?? declared.model?.baseUrl ?? null,
-      apiKey: env.GATEWAY_MODEL_API_KEY ?? declared.model?.apiKey ?? null,
-      name: env.GATEWAY_MODEL_NAME ?? declared.model?.name ?? null,
-    },
+    authToken: String(env.GATEWAY_AUTH_TOKEN ?? '').trim() || null,
   };
 }
