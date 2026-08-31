@@ -24,7 +24,19 @@ Eyes, ideas and a mouth — no hands:
   only on `POST /runs/:id/approve` with `approved: true`;
 - the `plan` operation is always a dry-run: never pause, never mutate.
 
+## Memory
+
+The Deep Agent keeps a **conversation memory per workspace**: every run is
+invoked with `configurable.thread_id = <workspace name>` (the manager sends the
+workspace with each run), and the thread state is checkpointed to
+`<GATEWAY_CONFIG_DIR>/memory.sqlite` (SqliteSaver, one saver per process). A
+workspace's run therefore resumes its previous thread — across runs and across
+gateway restarts. A request without a workspace lands on the `default` thread.
+Do not key threads on anything else: per-run ids would silently disable the
+memory the boundary advertises.
+
 ## Layout
+
 
 ```text
 bin/wiki-agentic-gateway.js   CLI entry (port 7789 by default)

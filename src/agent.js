@@ -1,13 +1,35 @@
 import { createDeepAgent } from 'deepagents';
 import { initChatModel } from 'langchain/chat_models/universal';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
+import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
+import { join } from 'node:path';
 
 // Module-level memory: a model that refused sampling parameters once is not
 // asked again during this process lifetime — one wasted call per model, not
 // per run. Provider-driven, no hardcoded model list.
 const samplingRefusedByModel = new Set();
 
-export function createAgentRunner({ model, mcpServers = [], onTool = null, signal = null }) {
+// One checkpointer per process, on the gateway's writable config dir (the
+// compose stack mounts .agents-data/gateway there). Threads are keyed by
+// WORKSPACE: every run of a workspace resumes the same thread, so the Deep
+// Agent keeps its conversation memory across runs and across gateway
+// restarts. A run whose request carries no workspace lands on 'default'.
+let sharedCheckpointer = null;
+function gatewayCheckpointer() {
+  if (sharedCheckpointer) return sharedCheckpointer;
+  const dir = process.env.GATEWAY_CONFIG_DIR ?? process.cwd();
+  sharedCheckpointer = SqliteSaver.fromConnString(join(dir, 'memory.sqlite'));
+  return sharedCheckpointer;
+}
+
+export function createAgentRunner({
+  model,
+  mcpServers = [],
+  onTool = null,
+  signal = null,
+  workspace = null,
+  checkpointer = null,
+}) {
   const baseUrl = model?.baseUrl ?? null;
   const rawName = model?.model ?? model?.name ?? null;
   const apiKey = model?.apiKey ?? null;
@@ -39,7 +61,7 @@ export function createAgentRunner({ model, mcpServers = [], onTool = null, signa
   }
 
   return {
-    async run({ objective, operation, capability, language, systemPrompt }) {
+    async run({ objective, operation, capability, language, systemPrompt, workspace: runWorkspace = workspace }) {
       const tools = await loadMcpTools(mcpServers);
       const input = [
         `Capability: ${capability ?? 'unknown'}`,
@@ -48,6 +70,8 @@ export function createAgentRunner({ model, mcpServers = [], onTool = null, signa
         '',
         `Objective: ${objective ?? ''}`,
       ].join('\n');
+      // threadId = workspace: the deep agent's memory is per workspace.
+      const threadId = String(runWorkspace?.name ?? runWorkspace ?? 'default');
       const invoke = (chatModel) => {
         const agent = createDeepAgent({
           model: chatModel,
@@ -56,10 +80,14 @@ export function createAgentRunner({ model, mcpServers = [], onTool = null, signa
           // profile). Without it, deepagents uses its generic assistant
           // prompt — the "upload your project" hallucination.
           ...(systemPrompt ? { systemPrompt } : {}),
+          checkpointer: checkpointer ?? gatewayCheckpointer(),
         });
         return agent.invoke(
           { messages: [{ role: 'user', content: input }] },
-          { signal: signal ?? undefined },
+          {
+            ...(signal ? { signal } : {}),
+            configurable: { thread_id: threadId },
+          },
         );
       };
       let events;

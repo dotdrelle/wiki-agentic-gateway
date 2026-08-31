@@ -102,6 +102,7 @@ export function startGateway({
         language: request.language ?? null,
         mcp: request.mcp ?? [],
         systemPrompt: request.systemPrompt ?? null,
+        workspace: request.workspace ?? null,
       });
       const content = typeof output === 'string' ? output : (output?.content ?? '');
       run.result = {
