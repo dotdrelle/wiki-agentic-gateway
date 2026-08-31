@@ -7,7 +7,7 @@ import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 // per run. Provider-driven, no hardcoded model list.
 const samplingRefusedByModel = new Set();
 
-export function createAgentRunner({ model, mcpServers = {}, onTool = null, signal = null }) {
+export function createAgentRunner({ model, mcpServers = [], onTool = null, signal = null }) {
   const baseUrl = model?.baseUrl ?? null;
   const rawName = model?.model ?? model?.name ?? null;
   const apiKey = model?.apiKey ?? null;

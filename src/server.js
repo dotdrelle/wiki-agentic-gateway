@@ -54,9 +54,12 @@ export function startGateway({
   // Resolved in the BODY, not as a default parameter: default initializers
   // evaluate in the parameter scope, which does not see `emit` — the closure
   // crashed with "emit is not defined" on the first tool callback.
-  const resolveRunner = createRunner ?? ((run, model) => createAgentRunner({
+  // The runner also receives the REQUEST: the MCP pool travels per run (the
+  // manager sends the active workspace's wiki), nothing MCP lives in the
+  // static gateway config.
+  const resolveRunner = createRunner ?? ((run, model, request) => createAgentRunner({
     model,
-    mcpServers: config.mcpServers,
+    mcpServers: request.mcp ?? [],
     signal: run.controller.signal,
     onTool: (event) => emit(run, mapToolEvent(event)),
   }));
@@ -91,7 +94,7 @@ export function startGateway({
         emit(run, { type: 'run_failed', error: run.error });
         return;
       }
-      const runner = resolveRunner(run, runModel);
+      const runner = resolveRunner(run, runModel, request);
       const output = await runner.run({
         objective: request.objective ?? request.input ?? null,
         operation,
@@ -104,6 +107,13 @@ export function startGateway({
       run.result = {
         status: 'completed',
         content,
+        // The agent proposes structural changes in prose (its system prompt
+        // says so). Lifted here into the structured field the manager's DAG
+        // integration reads (result.planExpansionRequest): a proposal left in
+        // free text is a finding nobody acts on.
+        ...(extractPlanExpansionRequest(content)
+          ? { planExpansionRequest: extractPlanExpansionRequest(content) }
+          : {}),
         ...(Array.isArray(output?.refusedParams) && output.refusedParams.length > 0
           ? { refusedParams: output.refusedParams }
           : {}),
@@ -217,6 +227,43 @@ function mapToolEvent(event) {
   return { type: event.done ? 'tool_finished' : 'tool_started', tool: event.name ?? 'agent' };
 }
 
+// The Deep Agent writes its proposals in the final answer as
+// {"planExpansionRequest": {...}}. Parse defensively: the whole content as
+// JSON first, then the first balanced {...} block containing the key. A
+// proposal must name a non-empty capability — anything else stays prose and
+// the manager simply reads the content.
+function extractPlanExpansionRequest(content) {  const text = String(content ?? '');
+  const candidates = [];
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') candidates.push(parsed);
+  } catch {
+    const open = text.indexOf('{');
+    if (open !== -1) {
+      for (let depth = 0, i = open; i < text.length; i += 1) {
+        if (text[i] === '{') depth += 1;
+        if (text[i] === '}') depth -= 1;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(text.slice(open, i + 1));
+            if (parsed && typeof parsed === 'object') candidates.push(parsed);
+          } catch { /* keep scanning for a later balanced block */ }
+          break;
+        }
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    const request = candidate?.planExpansionRequest ?? candidate;
+    if (request && typeof request === 'object'
+      && typeof request.capability === 'string'
+      && request.capability.trim() !== '') {
+      return request;
+    }
+  }
+  return null;
+}
+
 // When a token is configured, every route requires it — including /health,
 // mirroring the manager's own runtime (7788). No token configured = no auth
 // (dev mode).
@@ -248,4 +295,4 @@ function readBody(request, handler) {
   return undefined;
 }
 
-export { TERMINAL };
+export { TERMINAL, extractPlanExpansionRequest };
