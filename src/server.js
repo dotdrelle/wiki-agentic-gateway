@@ -79,7 +79,9 @@ export function startGateway({
           reason: 'analysis complete before execution',
           proposal: {
             summary: `Analysis for "${String(request.objective ?? '')}": read-only inspection, then the announced mutation.`,
-            readTools: Object.keys(config?.mcpServers ?? {}),
+            // The pool travels with the run (no static mcpServers since the
+            // per-run MCP pool): list what the runtime will actually see.
+            readTools: (request.mcp ?? []).flatMap((server) => (server?.tools ?? []).map(String)),
             mutations: [{ kind: capability?.mutationClass ?? 'default', summary: String(request.objective ?? '') }],
           },
         });
@@ -152,6 +154,35 @@ export function startGateway({
     }
     if (request.method === 'POST' && path === '/runs') {
       return readBody(request, async (body) => {
+        // A run names a capability THIS gateway serves, or it does not start.
+        // Governance (approval gate, mutation class) is decided from the
+        // served entry: an unknown name used to resolve to `null`, which read
+        // as "not mutating" — so a gateway degraded to its built-in default
+        // (the /config mount hidden under the data volume) executed
+        // agent.research / agent.notify with no approval at all. Refusing
+        // here makes the drift visible where it happens, and the manager
+        // reports the refused capability as such.
+        const requested = String(body.capability ?? '').trim();
+        const served = (config?.capabilities ?? []).map((capability) => String(capability?.name ?? ''));
+        if (!requested || !served.includes(requested)) {
+          return sendJson(response, 400, {
+            error: requested
+              ? `unknown capability "${requested}": this gateway serves ${served.join(', ') || 'nothing'}`
+              : 'the run must name a capability',
+            served,
+          });
+        }
+        const capability = capabilityFor(requested);
+        const operation = String(body.operation ?? 'run');
+        const operations = Array.isArray(capability?.operations) && capability.operations.length > 0
+          ? capability.operations.map(String)
+          : ['run'];
+        if (!operations.includes(operation)) {
+          return sendJson(response, 400, {
+            error: `operation "${operation}" not offered by ${requested} (offered: ${operations.join(', ')})`,
+            served,
+          });
+        }
         const runId = nextRunId();
         const run = {
           runId,

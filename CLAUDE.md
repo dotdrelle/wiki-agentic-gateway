@@ -22,7 +22,11 @@ Eyes, ideas and a mouth — no hands:
 - mutating capabilities (`mutationClass` / `defaultRequiresApproval`) pause
   through the HITL: emit `approval_required`, stay `waiting_approval`, resume
   only on `POST /runs/:id/approve` with `approved: true`;
-- the `plan` operation is always a dry-run: never pause, never mutate.
+- the `plan` operation is always a dry-run: never pause, never mutate;
+- `POST /runs` refuses (`400`, with the served list) a capability or operation
+  this gateway does not serve. Governance is decided from the served entry, so
+  an unknown name must never resolve to "not mutating" — a gateway degraded to
+  its built-in default would otherwise run `agent.research` ungated.
 
 ## Memory
 

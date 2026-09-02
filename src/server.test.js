@@ -73,3 +73,41 @@ test('the gateway serves the manager contract over HTTP', async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('the gateway refuses a run naming a capability it does not serve', async () => {
+  const server = startGateway({
+    port: 0,
+    config: {
+      version: 'test',
+      capabilities: [{ name: 'agent.review', operations: ['run'] }],
+      authToken: null,
+    },
+    createRunner: () => ({ run: async () => 'must not run' }),
+  });
+  const port = server.address().port;
+  const post = (body) => fetch(`http://127.0.0.1:${port}/runs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const model = { baseUrl: 'http://127.0.0.1:9/v1', model: 'openai/gpt-test' };
+  try {
+    // A gateway degraded to its default capability must not silently run a
+    // governed capability without its approval gate.
+    const unknown = await post({ capability: 'agent.research', operation: 'run', objective: 'x', model });
+    assert.equal(unknown.status, 400);
+    const unknownBody = await unknown.json();
+    assert.match(unknownBody.error, /unknown capability "agent.research"/);
+    assert.deepEqual(unknownBody.served, ['agent.review']);
+
+    const nameless = await post({ operation: 'run', objective: 'x', model });
+    assert.equal(nameless.status, 400);
+    assert.match((await nameless.json()).error, /must name a capability/);
+
+    const badOperation = await post({ capability: 'agent.review', operation: 'plan', objective: 'x', model });
+    assert.equal(badOperation.status, 400);
+    assert.match((await badOperation.json()).error, /operation "plan" not offered/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

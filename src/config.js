@@ -46,7 +46,7 @@ export function loadGatewayConfig({
     ?? entries.find((item) => item?.type === 'deepagents')
     ?? null;
   return {
-    version: String(env.GATEWAY_VERSION ?? '0.15.73'),
+    version: String(env.GATEWAY_VERSION ?? '0.15.74'),
     capabilities: Array.isArray(entry?.capabilities) && entry.capabilities.length > 0
       ? entry.capabilities
       : DEFAULT_CAPABILITIES,
