@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createAgentRunner } from './agent.js';
+import { pruneStaleWorktrees } from './worktree.js';
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
@@ -272,6 +273,16 @@ export function startGateway({
   });
 
   server.listen(port);
+  // Stale worktrees (merged elsewhere, abandoned reviews, crashed runs) are
+  // pruned at startup: the hands are bounded in time too. Best-effort — a
+  // workspace whose worktrees cannot be cleaned still serves.
+  void pruneStaleWorktrees({
+    workspacesRoot: process.env.GATEWAY_WORKSPACES_ROOT ?? '/workspaces',
+  }).then((result) => {
+    if (result.pruned.length > 0) {
+      console.warn(`pruned ${result.pruned.length} stale agent worktree(s): ${result.pruned.map((entry) => `${entry.workspace}/${entry.runId}`).join(', ')}`);
+    }
+  }).catch(() => {});
   return server;
 }
 

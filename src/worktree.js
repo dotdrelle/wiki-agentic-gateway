@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
-import { mkdir, realpath, readFile } from 'node:fs/promises';
+import { mkdir, readdir, realpath, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
 
@@ -97,6 +97,52 @@ export async function removeWorktree({ workspaceRoot, worktreePath, branch }) {
   }
 }
 
+/**
+ * The hands are bounded in TIME too, not only in space: a worktree nobody
+ * merges or rejects must not accumulate forever. Startup pruning removes
+ * worktrees older than the ceiling (default 7 days), branch included — the
+ * review window is the human's, the cleanup is the gateway's.
+ */
+export const GATEWAY_WORKTREE_MAX_AGE_MS =
+  Number.parseInt(process.env.GATEWAY_WORKTREE_MAX_AGE_MS ?? '', 10) || 7 * 24 * 3600 * 1000;
+
+export async function pruneStaleWorktrees({ workspacesRoot }) {
+  const pruned = [];
+  let entries = [];
+  try {
+    entries = await readdir(workspacesRoot);
+  } catch {
+    return { pruned, error: null };
+  }
+  for (const name of entries) {
+    const workspaceRoot = join(workspacesRoot, name);
+    const worktreesDir = join(workspaceRoot, '.wiki', 'agent-worktrees');
+    let runs = [];
+    try {
+      runs = await readdir(worktreesDir);
+    } catch {
+      continue;
+    }
+    for (const runId of runs) {
+      const worktreePath = join(worktreesDir, runId);
+      let stats;
+      try {
+        stats = await stat(worktreePath);
+      } catch {
+        continue;
+      }
+      if (Date.now() - stats.mtimeMs <= GATEWAY_WORKTREE_MAX_AGE_MS) continue;
+      await removeWorktree({
+        workspaceRoot,
+        worktreePath,
+        branch: `agent/${runId}`,
+      }).catch(() => {});
+      pruned.push({ workspace: name, runId });
+    }
+  }
+  return { pruned, error: null };
+}
+
 export function confinePath(root, input) {
   if (typeof input !== 'string' || input.length === 0) return root;
   const resolved = resolve(root, input);
@@ -185,6 +231,24 @@ export function createWorktreeBackend({ worktreePath }) {
     new FilesystemBackend({ rootDir: worktreePath, virtualMode: true }),
     { root: worktreePath },
   );
+}
+
+/**
+ * A diff nobody can read is a diff that never gets merged: refuse explicitly
+ * rather than queue a review item no human will open.
+ */
+export function worktreeProposalTooLarge(changes, diff, limits = {}) {
+  const maxFiles = limits.maxFiles ?? 40;
+  const maxDiffChars = limits.maxDiffChars ?? 300_000;
+  const count = Array.isArray(changes) ? changes.length : 0;
+  const diffLength = String(diff ?? '').length;
+  return {
+    oversized: count > maxFiles || diffLength > maxDiffChars,
+    files: count,
+    diffChars: diffLength,
+    maxFiles,
+    maxDiffChars,
+  };
 }
 
 export { basename, sep };

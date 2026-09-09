@@ -11,6 +11,7 @@ import {
   worktreeChanges,
   worktreeDiff,
   worktreeFileContent,
+  worktreeProposalTooLarge,
   workspaceRootFor,
 } from './worktree.js';
 import {
@@ -82,6 +83,14 @@ const GATEWAY_RECURSION_LIMIT =
   Number.parseInt(process.env.GATEWAY_RECURSION_LIMIT ?? '', 10) || 40;
 const GATEWAY_TOKEN_BUDGET =
   Number.parseInt(process.env.GATEWAY_TOKEN_BUDGET ?? '', 10) || 500_000;
+// A diff nobody can read is a diff that never gets merged, and the report's
+// rule is explicit refusal rather than accumulation: beyond these bounds the
+// run FAILS loudly (the worktree is removed) instead of queueing a review
+// item no human will open.
+const GATEWAY_WORKTREE_MAX_FILES =
+  Number.parseInt(process.env.GATEWAY_WORKTREE_MAX_FILES ?? '', 10) || 40;
+const GATEWAY_WORKTREE_MAX_DIFF_CHARS =
+  Number.parseInt(process.env.GATEWAY_WORKTREE_MAX_DIFF_CHARS ?? '', 10) || 300_000;
 
 export function createGatewayBoundaryMiddleware({
   allowedToolNames = [],
@@ -441,6 +450,23 @@ export function createAgentRunner({
       if (worktreeState) {
         const changes = await worktreeChanges({ worktreePath: worktreeState.path });
         const diff = await worktreeDiff({ worktreePath: worktreeState.path });
+        // The refusal is explicit, not a silent queue item: an oversized diff
+        // removes the branch and fails the run so the reader is told to ask
+        // for a smaller objective.
+        const bounds = worktreeProposalTooLarge(changes, diff, {
+          maxFiles: GATEWAY_WORKTREE_MAX_FILES,
+          maxDiffChars: GATEWAY_WORKTREE_MAX_DIFF_CHARS,
+        });
+        if (bounds.oversized) {
+          await removeWorktree({
+            workspaceRoot: workspaceRootFor(runWorkspace),
+            worktreePath: worktreeState.path,
+            branch: worktreeState.branch,
+          }).catch(() => {});
+          throw new Error(
+            `the curation diff is too large to review (${bounds.files} files, ${bounds.diffChars} chars — ceilings ${bounds.maxFiles} files / ${bounds.maxDiffChars} chars). The branch was discarded: re-run with a narrower objective.`,
+          );
+        }
         const workspaceRoot = workspaceRootFor(runWorkspace);
         worktreeProposal = {
           workspace: String(runWorkspace?.name ?? runWorkspace ?? ''),

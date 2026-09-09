@@ -11,9 +11,11 @@ import {
   confinePath,
   createConfinedBackend,
   createWorktree,
+  pruneStaleWorktrees,
   removeWorktree,
   worktreeChanges,
   worktreeDiff,
+  worktreeProposalTooLarge,
 } from './worktree.js';
 
 function gitRepo(files) {
@@ -103,4 +105,35 @@ test('the confined backend refuses writes that escape the worktree', async () =>
   const written = await backend.write('wiki/x.md', '# X');
   assert.ok(!('error' in written) || written.error === undefined);
   assert.ok(existsSync(join(root, 'wiki', 'x.md')));
+});
+
+test('pruneStaleWorktrees removes abandoned worktrees past the age ceiling', async () => {
+  const root = gitRepo({ 'wiki/x.md': '# X' });
+  const workspacesRoot = join(root, '..');
+  const fresh = await createWorktree({ workspaceRoot: root, runId: 'fresh-run' });
+  const stale = await createWorktree({ workspaceRoot: root, runId: 'stale-run' });
+  try {
+    // Age the stale worktree's directory beyond the ceiling.
+    const old = Date.now() - (7 * 24 * 3600 * 1000 + 60_000);
+    const staleDir = stale.path;
+    execFileSync('touch', ['-t', new Date(old).toISOString().replace(/[-:T]/g, '').slice(0, 12), staleDir]);
+
+    const { pruned } = await pruneStaleWorktrees({ workspacesRoot });
+    assert.ok(pruned.some((entry) => entry.runId === 'stale-run'), 'the stale worktree is pruned');
+    assert.ok(!pruned.some((entry) => entry.runId === 'fresh-run'), 'the fresh worktree stays');
+    assert.ok(!existsSync(stale.path));
+    assert.ok(existsSync(fresh.path));
+  } finally {
+    await removeWorktree({ workspaceRoot: root, worktreePath: fresh.path, branch: fresh.branch }).catch(() => {});
+    execFileSync('git', ['worktree', 'prune'], { cwd: root }).toString('utf8');
+  }
+});
+
+test('worktreeProposalTooLarge refuses unreadable diffs explicitly', () => {
+  assert.equal(worktreeProposalTooLarge([], '', { maxFiles: 40, maxDiffChars: 300000 }).oversized, false);
+  assert.equal(worktreeProposalTooLarge(new Array(41).fill({}), '', { maxFiles: 40, maxDiffChars: 300000 }).oversized, true);
+  assert.equal(worktreeProposalTooLarge([{}], 'x'.repeat(300001), { maxFiles: 40, maxDiffChars: 300000 }).oversized, true);
+  const bounds = worktreeProposalTooLarge([{}, {}], 'small', { maxFiles: 40, maxDiffChars: 300000 });
+  assert.equal(bounds.oversized, false);
+  assert.equal(bounds.files, 2);
 });
