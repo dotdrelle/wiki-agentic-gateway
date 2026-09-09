@@ -1,6 +1,6 @@
 {
   "name": "@dotdrelle/wiki-agentic-gateway",
-  "version": "0.15.85",
+  "version": "0.15.86",
   "description": "External agentic runtime gateway (Deep Agents) implementing the Wiki Manager RuntimeProvider contract over HTTP.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node ./bin/wiki-agentic-gateway.js",
-    "test": "node --test src/server.test.js"
+    "test": "node --test src/server.test.js src/frontier.test.js src/worktree.test.js src/collective.test.js"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -18,7 +18,12 @@
     "@langchain/langgraph-checkpoint-sqlite": "^1.0.4",
     "@langchain/mcp-adapters": "^1.1.4",
     "@langchain/openai": "^1.5.10",
-    "deepagents": "^1.13.2"
+    "deepagents": "^1.13.2",
+    "langchain": "^1.5.10"
+  },
+  "devDependencies": {
+    "@langchain/core": "^1.2.9",
+    "zod": "^4.3.6"
   },
   "files": [
     "bin",

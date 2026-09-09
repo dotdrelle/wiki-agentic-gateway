@@ -28,6 +28,83 @@ Eyes, ideas and a mouth — no hands:
   an unknown name must never resolve to "not mutating" — a gateway degraded to
   its built-in default would otherwise run `agent.research` ungated.
 
+### The harness frontier (lot 0)
+
+`deepagents` attaches its own tools UNDER whatever the gateway declares — the
+filesystem set (`ls, read_file, write_file, edit_file, delete, glob, grep,
+execute`) and a generic `task` subagent. They write to the in-memory
+`StateBackend` (declared explicitly, never defaulted), so nothing on the
+workspace is reachable through them — but without the boundary the model is
+*told* it can write, edit and delete, and pays those definitions in tokens.
+
+`src/agent.js` closes the gap in one place:
+
+- `createGatewayBoundaryMiddleware` (middleware name `GatewayToolBoundary`)
+  strips every tool outside the run's MCP allow-list from the model request
+  (the last mutation before the model call), and refuses at execution any
+  call that sneaks through — the second layer is what protects a future
+  backend swap;
+- `buildGatewayAgent` is the single assembly used by both the runner and the
+  contract test, with the backend declared explicitly;
+- ceilings that did not exist: `GATEWAY_RECURSION_LIMIT` (default 40) and
+  `GATEWAY_TOKEN_BUDGET` (default 500 000, estimated before each model call
+  with the harness's own counter). The 600s task timeout stays.
+
+`src/frontier.test.js` is the contract: it builds the production wiring with a fake
+model and asserts the visible tool set is exactly the declared MCP pool.
+A future `deepagents` version that adds a default tool fails that test by
+name — the degradation announces itself instead of reopening the gap in
+silence. Any change to the backend, the middleware order, or the deepagents
+version must keep this test green.
+
+### Worktree hands (lot 1, `worktree: true` capabilities)
+
+A capability declared `"worktree": true` (today: `agent.curate`) arms real but
+confined hands, and the merge is the approval:
+
+- one git worktree per objective: `git worktree add -b agent/<runId>` under
+  the workspace's `.wiki/agent-worktrees/<runId>` (gitignored state, same
+  mount every container shares; the image carries git for this);
+- the backend is `FilesystemBackend({ virtualMode: true })` wrapped by
+  `createConfinedBackend` (`src/worktree.js`) — the canonical-path check
+  (lexical + realpath of the deepest existing ancestor) enforced on EVERY
+  operation, reads and writes alike. Without it "the hands are bounded by the
+  worktree" is false; it must move with the backend;
+- the declared tool set widens to the filesystem names minus `execute`
+  (`GATEWAY_WORKTREE_TOOL_NAMES`); `task` stays absent until lot 2;
+- the run result carries `worktreeProposal` (`changedFiles`, per-file new
+  `changes`, unified `diff`, workspace-relative worktree path, branch). The
+  manager persists it into `.wiki/agent-proposals/`, the served review page
+  (`/agent-proposals`) merges or rejects — the gateway NEVER writes the
+  workspace, and a failed run removes its own worktree;
+- the capability declares no `mutationClass`/`defaultRequiresApproval`: no
+  pre-run approval pause — the human merge IS the approval.
+
+### The collective (lot 2, declared per capability via `subagents: [...]`)
+
+Five named roles (`src/collective.js`): **Scout** (finds material), **Analyst**
+(structures it), **Critique** (structured objections — one
+`[objection] severity: blocking|non-blocking — <path> — reason` line per
+problem, NEVER blocks), **Redactor** (writes the corrections, worktree runs
+only), **Archivist** (learned / obsolete / to re-verify). A capability's
+`subagents` list selects which roles run, in the canonical order above.
+
+The roles run as a **sequence of bounded single-agent runs driven by the
+gateway**, each with isolated context (own system prompt, own thread
+`<workspace>:<runId>:<role>`, own boundary allow-list — the Critique has no
+write tools by construction), passing a bounded handoff section to the next;
+the main agent then assembles the final answer and must repeat unresolved
+objections verbatim under `## Objections`. The gateway emits
+`subagent_started` / `subagent_finished` / `tool_*` SSE events per role — the
+manager's `runtimeEventAdapter` already surfaces them.
+
+Deliberately NOT built on deepagents `subagents`: 1.13.2's subagent path and
+its subagent streaming (issue #284) remain the open JS/Python question the
+refonte report records. Sequencing in our code is the same collective without
+that dependency, and the frontier test stays authoritative either way. If a
+future deepagents version fixes the subagent path, this is the seam to
+re-evaluate — the role specs and the event vocabulary stay unchanged.
+
 ## Memory
 
 The Deep Agent keeps a **conversation memory per workspace**: every run is
@@ -45,7 +122,8 @@ memory the boundary advertises.
 ```text
 bin/wiki-agentic-gateway.js   CLI entry (port 7789 by default)
 src/server.js                 HTTP contract (7 routes), in-memory runs, SSE
-src/agent.js                  Deep Agents integration (single point)
+src/agent.js                  Deep Agents integration (single point): harness boundary, limits, buildGatewayAgent
+src/frontier.test.js          Contract test: the model sees exactly the declared MCP pool
 src/config.js                 capabilities from the manager's agent-runtimes.json (own entry), token from env
 ```
 

@@ -57,12 +57,21 @@ export function startGateway({
   // The runner also receives the REQUEST: the MCP pool travels per run (the
   // manager sends the active workspace's wiki), nothing MCP lives in the
   // static gateway config.
-  const resolveRunner = createRunner ?? ((run, model, request) => createAgentRunner({
-    model,
-    mcpServers: request.mcp ?? [],
-    signal: run.controller.signal,
-    onTool: (event) => emit(run, mapToolEvent(event)),
-  }));
+  const resolveRunner = createRunner ?? ((run, model, request) => {
+    const capability = capabilityFor(String(request.capability ?? ''));
+    return createAgentRunner({
+      model,
+      mcpServers: request.mcp ?? [],
+      signal: run.controller.signal,
+      onEvent: (event) => emit(run, event),
+      // The hands follow the served capability declaration, never the request:
+      // `worktree: true` on the capability is what arms the confined backend.
+      worktree: capability?.worktree === true,
+      // The collective (named subagents) is declared per capability too.
+      roles: Array.isArray(capability?.subagents) ? capability.subagents.map(String) : [],
+      runId: run.runId,
+    });
+  });
 
   async function executeRun(run, request) {
     const capability = capabilityFor(String(request.capability ?? ''));
@@ -117,10 +126,15 @@ export function startGateway({
         ...(extractPlanExpansionRequest(content)
           ? { planExpansionRequest: extractPlanExpansionRequest(content) }
           : {}),
+        // Worktree hands (lot 1): the confined branch the run edited, with
+        // the diff the human merges or rejects. The manager persists it into
+        // the workspace review queue; nothing here touched the wiki.
+        ...(output?.worktreeProposal ? { worktreeProposal: output.worktreeProposal } : {}),
         ...(Array.isArray(output?.refusedParams) && output.refusedParams.length > 0
           ? { refusedParams: output.refusedParams }
           : {}),
       };
+      run.worktreeProposal = output?.worktreeProposal ?? null;
       run.status = 'completed';
       emit(run, { type: 'message', content });
       emit(run, { type: 'run_completed' });
@@ -144,7 +158,7 @@ export function startGateway({
     }
     const url = new URL(request.url ?? '/', 'http://gateway.local');
     const path = url.pathname;
-    const runMatch = /^\/runs\/([^/]+)(\/(cancel|approve|events))?$/.exec(path);
+    const runMatch = /^\/runs\/([^/]+)(\/(cancel|approve|events|proposal))?$/.exec(path);
 
     if (request.method === 'GET' && path === '/health') {
       return sendJson(response, 200, { ok: true, version: config?.version ?? 'unknown' });
@@ -239,6 +253,12 @@ export function startGateway({
           sendJson(response, 200, { ok: true });
         });
       }
+      if (sub === '/proposal' && request.method === 'GET') {
+        if (!run.worktreeProposal) {
+          return sendJson(response, 404, { error: `run ${runId} carries no worktree proposal` });
+        }
+        return sendJson(response, 200, { runId, proposal: run.worktreeProposal });
+      }
       if (request.method === 'GET') {
         return sendJson(response, 200, {
           runId: run.runId,
@@ -253,10 +273,6 @@ export function startGateway({
 
   server.listen(port);
   return server;
-}
-
-function mapToolEvent(event) {
-  return { type: event.done ? 'tool_finished' : 'tool_started', tool: event.name ?? 'agent' };
 }
 
 // The Deep Agent writes its proposals in the final answer as

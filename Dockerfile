@@ -15,6 +15,11 @@ RUN npm ci --omit=dev
 FROM node:22-slim
 ENV NODE_ENV=production
 WORKDIR /app
+# git: worktree runs (agent.curate) create one branch per objective and diff
+# against it — the merge/review machinery lives in the workspace git repo.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/node_modules ./node_modules
 COPY . .
 

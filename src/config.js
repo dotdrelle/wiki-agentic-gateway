@@ -45,11 +45,27 @@ export function loadGatewayConfig({
   const entry = entries.find((item) => item?.id === runtimeId)
     ?? entries.find((item) => item?.type === 'deepagents')
     ?? null;
+  const declared = Array.isArray(entry?.capabilities) && entry.capabilities.length > 0
+    ? entry.capabilities
+    : null;
+  // Falling back to a single built-in capability while the operator believes
+  // the declared set is live is the failure that hides every other one: the
+  // manager intersects what it serves with what it declares, so the runtime
+  // quietly answers for one capability and refuses the rest as "unsupported".
+  // A bind-mount onto a path that does not exist is enough to land here —
+  // Docker then creates a DIRECTORY where the file was expected, and the read
+  // above fails with EISDIR.
+  if (!declared) {
+    console.warn(
+      `agent-runtimes.json declared no capabilities for runtime "${runtimeId}"`
+      + ` (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} read from ${file}).`
+      + ` Falling back to ${DEFAULT_CAPABILITIES.map((item) => item.name).join(', ')} only —`
+      + ' every other capability will be refused as unsupported.',
+    );
+  }
   return {
-    version: String(env.GATEWAY_VERSION ?? '0.15.85'),
-    capabilities: Array.isArray(entry?.capabilities) && entry.capabilities.length > 0
-      ? entry.capabilities
-      : DEFAULT_CAPABILITIES,
+    version: String(env.GATEWAY_VERSION ?? '0.15.86'),
+    capabilities: declared ?? DEFAULT_CAPABILITIES,
     authToken: String(env.GATEWAY_AUTH_TOKEN ?? '').trim() || null,
   };
 }
