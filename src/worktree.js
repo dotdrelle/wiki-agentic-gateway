@@ -26,6 +26,10 @@ async function git(args, cwd) {
   return execFileAsync('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 });
 }
 
+function branchNameFor(runId) {
+  return `agent/${runId}`;
+}
+
 /**
  * One objective, one branch: a detached-to-branch git worktree of the
  * workspace, checked out at HEAD. The agent edits files INSIDE this tree;
@@ -41,7 +45,7 @@ export async function createWorktree({ workspaceRoot, runId }) {
       `workspace ${workspaceRoot} has no git repository: worktree runs need the workspace history (git) to propose diffs`,
     );
   }
-  const branch = `agent/${runId}`;
+  const branch = branchNameFor(runId);
   const worktreePath = join(workspaceRoot, '.wiki', 'agent-worktrees', runId);
   if (existsSync(worktreePath)) {
     throw new WorktreeUnavailableError(`worktree already exists for run ${runId}`);
@@ -135,7 +139,7 @@ export async function pruneStaleWorktrees({ workspacesRoot }) {
       await removeWorktree({
         workspaceRoot,
         worktreePath,
-        branch: `agent/${runId}`,
+        branch: branchNameFor(runId),
       }).catch(() => {});
       pruned.push({ workspace: name, runId });
     }
@@ -235,11 +239,11 @@ export function createWorktreeBackend({ worktreePath }) {
 
 /**
  * A diff nobody can read is a diff that never gets merged: refuse explicitly
- * rather than queue a review item no human will open.
+ * rather than queue a review item no human will open. Callers own the
+ * ceilings (see GATEWAY_WORKTREE_MAX_FILES/GATEWAY_WORKTREE_MAX_DIFF_CHARS in
+ * agent.js) — no defaults here, so there is only one place they can drift.
  */
-export function worktreeProposalTooLarge(changes, diff, limits = {}) {
-  const maxFiles = limits.maxFiles ?? 40;
-  const maxDiffChars = limits.maxDiffChars ?? 300_000;
+export function worktreeProposalTooLarge(changes, diff, { maxFiles, maxDiffChars }) {
   const count = Array.isArray(changes) ? changes.length : 0;
   const diffLength = String(diff ?? '').length;
   return {
