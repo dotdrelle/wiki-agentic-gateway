@@ -1,5 +1,5 @@
 import { createDeepAgent, StateBackend } from 'deepagents';
-import { createMiddleware, countTokensApproximately } from 'langchain';
+import { createMiddleware, countTokensApproximately, ToolMessage } from 'langchain';
 import { initChatModel } from 'langchain/chat_models/universal';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
@@ -121,9 +121,14 @@ export function createGatewayBoundaryMiddleware({
     async wrapToolCall(request, handler) {
       const name = String(request?.toolCall?.name ?? '');
       if (name && !allowed.has(name)) {
-        throw new Error(
-          `tool "${name}" is not in the run's MCP allow-list and was refused at the gateway boundary`,
-        );
+        return new ToolMessage({
+          content:
+            `tool "${name}" is not in the run's MCP allow-list and was refused at the gateway boundary. ` +
+            'Do not call it again: use only the MCP tools the run gave you.',
+          name,
+          tool_call_id: request.toolCall?.id,
+          status: 'error',
+        });
       }
       return handler(request);
     },

@@ -45,15 +45,18 @@ test('the model sees only the declared MCP tools, never the harness defaults', a
   }
 });
 
-test('the boundary refuses a tool call outside the allow-list', async () => {
+test('the boundary refuses a tool call outside the allow-list as a tool error', async () => {
   const boundary = createGatewayBoundaryMiddleware({
     allowedToolNames: ['wiki__wiki_read_page'],
   });
 
-  await assert.rejects(
-    boundary.wrapToolCall({ toolCall: { name: 'write_file' } }, async () => 'executed'),
-    /not in the run's MCP allow-list/,
+  const refused = await boundary.wrapToolCall(
+    { toolCall: { name: 'write_file', id: 'call-wf' } },
+    async () => 'executed',
   );
+  assert.equal(refused.tool_call_id, 'call-wf');
+  assert.equal(refused.status, 'error');
+  assert.match(String(refused.content), /not in the run's MCP allow-list/);
   const result = await boundary.wrapToolCall(
     { toolCall: { name: 'wiki__wiki_read_page' } },
     async () => 'executed',
