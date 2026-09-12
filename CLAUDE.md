@@ -66,10 +66,17 @@ confined hands, and the merge is the approval:
   the workspace's `.wiki/agent-worktrees/<runId>` (gitignored state, same
   mount every container shares; the image carries git for this);
 - the backend is `FilesystemBackend({ virtualMode: true })` wrapped by
-  `createConfinedBackend` (`src/worktree.js`) — the canonical-path check
-  (lexical + realpath of the deepest existing ancestor) enforced on EVERY
-  operation, reads and writes alike. Without it "the hands are bounded by the
-  worktree" is false; it must move with the backend;
+  `createConfinedBackend` (`src/worktree.js`), because the inner backend takes
+  the harness's **virtual** absolute paths rooted at the worktree (`/`,
+  `/wiki/x.md`). The wrapper strips the leading `/`, resolves the remainder
+  under the real root, refuses `..`/`~` and enforces lexical containment, then
+  re-expresses the virtual path for the inner call; writes additionally keep the
+  canonical (realpath) containment check. Feeding `/` straight to the host-path
+  helper treated it as the host root and refused it (`path escapes the
+  worktree: /`), which killed every curate run at its first `ls('/')`;
+  `src/worktree.test.js` exercises the virtual root, read and write. Without the
+  wrapper "the hands are bounded by the worktree" is false; it must move with
+  the backend;
 - the declared tool set widens to the filesystem names minus `execute`
   (`GATEWAY_WORKTREE_TOOL_NAMES`); `task` stays absent until lot 2;
 - the run result carries `worktreeProposal` (`changedFiles`, per-file new
