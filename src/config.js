@@ -64,7 +64,7 @@ export function loadGatewayConfig({
     );
   }
   return {
-    version: String(env.GATEWAY_VERSION ?? '0.15.93'),
+    version: String(env.GATEWAY_VERSION ?? '0.15.94'),
     capabilities: declared ?? DEFAULT_CAPABILITIES,
     authToken: String(env.GATEWAY_AUTH_TOKEN ?? '').trim() || null,
   };

@@ -193,16 +193,30 @@ export async function confineForWrite(root, input) {
  * be re-rooted and land in the wrong place.
  */
 export function createConfinedBackend(inner, { root }) {
+  /*
+   The harness speaks VIRTUAL absolute paths rooted at the worktree ('/',
+   '/wiki/x.md') — the inner backend runs in virtualMode. The wrapper must read
+   the incoming path the same way: strip the leading slash and resolve it under
+   the real root BEFORE containing it. Feeding it straight to confinePath
+   treated '/' as the host root and refused it ("path escapes the worktree: /"),
+   which killed every curate run at its first ls('/').
+  */
+  const toHost = (input) => {
+    const vpath = typeof input === 'string' && input.length ? input : '/';
+    if (vpath.includes('..') || vpath.startsWith('~')) throw new Error(`path escapes the worktree: ${input}`);
+    return resolve(root, vpath.replace(/^\/+/, ''));
+  };
+  // Re-express a (virtual) input as the virtual path the inner backend wants.
   const toVirtual = (input) => {
-    const resolved = confinePath(root, input);
-    const rel = relative(root, resolved);
-    if (rel.startsWith('..') || isAbsolute(rel)) return resolved;
-    return `/${rel.split(sep).join('/')}`;
+    const rel = relative(root, toHost(input));
+    if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`path escapes the worktree: ${input}`);
+    return rel ? `/${rel.split(sep).join('/')}` : '/';
   };
   const virtualForWrite = async (input) => {
-    const resolved = await confineForWrite(root, input);
-    const rel = relative(root, resolved);
-    return rel.startsWith('..') || isAbsolute(rel) ? resolved : `/${rel.split(sep).join('/')}`;
+    // Canonical containment for writes: a symlinked parent inside the tree
+    // could otherwise point outside it.
+    await confineForWrite(root, relative(root, toHost(input)));
+    return toVirtual(input);
   };
   return {
     async ls(dirPath) { return inner.ls(toVirtual(dirPath)); },

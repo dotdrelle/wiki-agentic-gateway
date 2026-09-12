@@ -107,6 +107,35 @@ test('the confined backend refuses writes that escape the worktree', async () =>
   assert.ok(existsSync(join(root, 'wiki', 'x.md')));
 });
 
+test('the confined backend reads the harness virtual paths, root "/" included', async () => {
+  // The deepagents filesystem tools pass VIRTUAL absolute paths ('/',
+  // '/wiki/x.md'), not host paths. Feeding '/' to the host-path containment
+  // threw "path escapes the worktree: /" and every curate run died at its
+  // first ls('/').
+  const root = mkdtempSync(join(tmpdir(), 'gateway-wt-virtual-'));
+  mkdirSync(join(root, 'wiki'));
+  writeFileSync(join(root, 'wiki', 'a.md'), '# A\n');
+  const backend = createConfinedBackend(
+    new FilesystemBackend({ rootDir: root, virtualMode: true }),
+    { root },
+  );
+
+  const listing = await backend.ls('/');
+  const paths = (Array.isArray(listing) ? listing : listing?.files ?? []).map((entry) => entry.path ?? entry.name ?? String(entry));
+  assert.ok(paths.some((p) => String(p).includes('wiki')), 'root listing includes the wiki folder');
+
+  const read = await backend.read('/wiki/a.md');
+  const content = typeof read === 'string' ? read : (read?.content ?? '');
+  assert.match(String(content), /# A/);
+
+  const written = await backend.write('/wiki/b.md', '# B');
+  assert.ok(!('error' in written) || written.error === undefined);
+  assert.ok(existsSync(join(root, 'wiki', 'b.md')));
+
+  await assert.rejects(backend.ls('/../escape'), /escapes the worktree/);
+  await assert.rejects(backend.ls('/wiki/../../escape'), /escapes the worktree/);
+});
+
 test('pruneStaleWorktrees removes abandoned worktrees past the age ceiling', async () => {
   const root = gitRepo({ 'wiki/x.md': '# X' });
   const workspacesRoot = join(root, '..');
