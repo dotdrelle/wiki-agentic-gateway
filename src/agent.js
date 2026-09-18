@@ -130,7 +130,25 @@ export function createGatewayBoundaryMiddleware({
           status: 'error',
         });
       }
-      return handler(request);
+      try {
+        return await handler(request);
+      } catch (error) {
+        // A tool that fails is a RESULT, not the end of the run: a curation run
+        // died entirely on one `wiki_read_page` naming a page the model had
+        // guessed ("Page not found"), before any review item was produced.
+        // Feeding the failure back as a tool error lets the model adapt (read
+        // the real path, skip the page) instead of losing the whole run. An
+        // abort still escapes — cancellation is not a tool result.
+        if (error?.name === 'AbortError') throw error;
+        return new ToolMessage({
+          content:
+            `tool "${name}" failed: ${error instanceof Error ? error.message : String(error)}. `
+            + 'Use another tool or another path; do not repeat the same call.',
+          name,
+          tool_call_id: request.toolCall?.id,
+          status: 'error',
+        });
+      }
     },
   });
 }
@@ -364,6 +382,19 @@ export function createAgentRunner({
             signal,
             callbacks,
           });
+        } catch (error) {
+          // A role failure (a model or transport error, since a failing TOOL is
+          // now a tool result) must not leave a branch nobody will review — the
+          // old cleanup only covered the main assembly invoke, so a Scout that
+          // died left its worktree and branch behind.
+          if (worktreeState) {
+            await removeWorktree({
+              workspaceRoot: workspaceRootFor(runWorkspace),
+              worktreePath: worktreeState.path,
+              branch: worktreeState.branch,
+            }).catch(() => {});
+          }
+          throw error;
         } finally {
           onEvent?.({ type: 'subagent_finished', subagent: role });
         }

@@ -64,6 +64,34 @@ test('the boundary refuses a tool call outside the allow-list as a tool error', 
   assert.equal(result, 'executed');
 });
 
+test('a failing tool is returned as a tool error, not thrown out of the run', async () => {
+  const boundary = createGatewayBoundaryMiddleware({
+    allowedToolNames: ['wiki__wiki_read_page'],
+  });
+
+  const failed = await boundary.wrapToolCall(
+    { toolCall: { name: 'wiki__wiki_read_page', id: 'call-read' } },
+    async () => {
+      throw new Error("MCP tool 'wiki_read_page' on server 'wiki' returned an error: Page not found: wiki/concepts/produit/demonstration-anaplan.md");
+    },
+  );
+  // The run survives the failure: the model receives a tool error it can adapt
+  // to, instead of the whole curation being lost before any proposal exists.
+  assert.equal(failed.tool_call_id, 'call-read');
+  assert.equal(failed.status, 'error');
+  assert.match(String(failed.content), /Page not found/);
+
+  // An abort is not a tool result: cancellation must still escape.
+  const abort = Object.assign(new Error('aborted'), { name: 'AbortError' });
+  await assert.rejects(
+    boundary.wrapToolCall(
+      { toolCall: { name: 'wiki__wiki_read_page', id: 'call-abort' } },
+      async () => { throw abort; },
+    ),
+    /aborted/,
+  );
+});
+
 test('the boundary enforces the token budget before the next model call', async () => {
   const boundary = createGatewayBoundaryMiddleware({
     allowedToolNames: [],

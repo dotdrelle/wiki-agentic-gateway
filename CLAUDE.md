@@ -41,9 +41,12 @@ workspace is reachable through them — but without the boundary the model is
 
 - `createGatewayBoundaryMiddleware` (middleware name `GatewayToolBoundary`)
   strips every tool outside the run's MCP allow-list from the model request
-  (the last mutation before the model call), and refuses at execution any
-  call that sneaks through — the second layer is what protects a future
-  backend swap;
+  (the last mutation before the model call), refuses at execution any call
+  that sneaks through — the second layer is what protects a future backend
+  swap — and turns a FAILING tool into a `status: 'error'` ToolMessage the
+  model can adapt to, instead of letting it abort the run: a curation run died
+  entirely on one `wiki_read_page` naming a page the model had guessed, before
+  producing any proposal. Only an AbortError escapes;
 - `buildGatewayAgent` is the single assembly used by both the runner and the
   contract test, with the backend declared explicitly;
 - ceilings that did not exist: `GATEWAY_RECURSION_LIMIT` (default 40) and
