@@ -502,3 +502,89 @@ test('eviction removes every thread of the scope, including actor and role keys'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A model that holds scout and redteam at a barrier until BOTH have started:
+// under a sequential scheduler the first one would wait for a partner that
+// never arrives, so the barrier is itself the proof of parallelism.
+class BarrierModel extends BaseChatModel {
+  constructor(timeline, gate, release) {
+    super({});
+    this.timeline = timeline;
+    this.gate = gate;
+    this.release = release;
+  }
+  _llmType() { return 'barrier'; }
+  _combineLLMOutput() { return []; }
+  bindTools() { return this; }
+  async _generate(messages) {
+    const text = messages.map((message) => String(message?.content ?? '')).join('\n');
+    const role = ['scout', 'redteam'].find((name) => text.includes(`Your task as the ${name}`));
+    if (role) {
+      this.timeline.push(`start:${role}`);
+      if (this.timeline.filter((entry) => entry.startsWith('start:')).length === 2) this.release();
+      await Promise.race([this.gate, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      this.timeline.push(`end:${role}`);
+      return { generations: [{ message: new AIMessage(`[${role}] findings`), text: '' }], llmOutput: {} };
+    }
+    return { generations: [{ message: new AIMessage('assembled'), text: '' }], llmOutput: {} };
+  }
+}
+
+test('with concurrency 2, scout and redteam run in parallel', async () => {
+  const previous = process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
+  process.env.GATEWAY_COLLECTIVE_CONCURRENCY = '2';
+  try {
+    const timeline = [];
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const runner = createAgentRunner({
+      model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+      mcpServers: [],
+      toolsOverride: [readTool()],
+      roles: ['scout', 'redteam'],
+      checkpointer: false,
+      runId: 'parallel-1',
+      chatModelOverride: new BarrierModel(timeline, gate, release),
+    });
+
+    await runner.run({ objective: 'audit', capability: 'agent.review', workspace: 'acme' });
+    assert.ok(
+      timeline.indexOf('start:redteam') < timeline.indexOf('end:scout'),
+      `both roles must start before either ends — saw ${timeline.join(', ')}`,
+    );
+    assert.ok(timeline.indexOf('start:scout') < timeline.indexOf('end:redteam'));
+  } finally {
+    if (previous === undefined) delete process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
+    else process.env.GATEWAY_COLLECTIVE_CONCURRENCY = previous;
+  }
+});
+
+test('the first role failure under parallelism falls back to sequential and says so', async () => {
+  const previous = process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
+  process.env.GATEWAY_COLLECTIVE_CONCURRENCY = '2';
+  try {
+    const events = [];
+    const runner = createAgentRunner({
+      model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+      mcpServers: [],
+      toolsOverride: [readTool()],
+      roles: ['scout', 'redteam', 'analyst'],
+      checkpointer: false,
+      runId: 'parallel-fallback',
+      onEvent: (event) => events.push(event),
+      chatModelOverride: new FailingRoleModel('redteam'),
+    });
+
+    await runner.run({ objective: 'audit', capability: 'agent.review', workspace: 'acme' });
+
+    assert.ok(events.some((event) => event.type === 'degraded' && event.capability === 'role:redteam'));
+    const fallback = events.find((event) => event.capability === 'collective-concurrency');
+    assert.ok(fallback, 'the fallback is announced');
+    assert.match(fallback.fallback, /sequential/);
+    // The run still completed with the required roles.
+    assert.ok(events.some((event) => event.type === 'subagent_finished' && event.subagent === 'analyst'));
+  } finally {
+    if (previous === undefined) delete process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
+    else process.env.GATEWAY_COLLECTIVE_CONCURRENCY = previous;
+  }
+});

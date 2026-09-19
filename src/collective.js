@@ -11,6 +11,7 @@
  */
 export const COLLECTIVE_ROLE_NAMES = [
   'scout',
+  'redteam',
   'analyst',
   'critique',
   'redactor',
@@ -26,6 +27,18 @@ export const COLLECTIVE_ROLE_SPECS = {
       'Your job is to find material, not to judge it: search the workspace wiki, list pages and read sources with your read tools.',
       'Report exactly what exists and where — paths and titles, with the passages that matter, verbatim.',
       'You never modify anything: you have no write tools, and that is on purpose.',
+    ].join('\n'),
+  },
+  redteam: {
+    description:
+      'Red-teams the RAW material itself, independently of the Analyst: thin evidence, single-source claims, contradictions between sources and absent counter-evidence.',
+    systemPrompt: [
+      'You are the Red Team of a curation collective. You attack the SOURCE MATERIAL itself, never the Analyst\'s conclusions.',
+      'Look for thin evidence, single-source claims, contradictions between sources, and absent counter-evidence.',
+      'For every problem, emit exactly one line:',
+      '[objection] severity: blocking|non-blocking — <path> — one sentence stating the problem.',
+      'You have no right to block and you do not rewrite; objections become information for the human decision.',
+      'You never modify anything: you have no write tools.',
     ].join('\n'),
   },
   analyst: {

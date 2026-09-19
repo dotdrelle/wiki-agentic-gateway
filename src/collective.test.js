@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
-import { createAgentRunner } from './agent.js';
+import { COLLECTIVE_ROLE_GRAPH, createAgentRunner, dependencyRoles } from './agent.js';
 import { extractObjections, extractResolutions } from './collective.js';
 
 // Scripted model: responses are consumed in order, the last one repeats.
@@ -176,4 +176,22 @@ test('the Archivist closes an objection by naming it, and only then', () => {
   // A statement-only resolution is allowed; prose without the marker is not.
   assert.deepEqual(extractResolutions('[resolved] unsourced claim'), [{ path: null, statement: 'unsourced claim' }]);
   assert.deepEqual(extractResolutions('I think the claim is probably fine now.'), []);
+});
+
+test('the role graph gives each role its transitive handoffs in canonical order', () => {
+  assert.deepEqual(COLLECTIVE_ROLE_GRAPH.scout, []);
+  assert.deepEqual(COLLECTIVE_ROLE_GRAPH.redteam, [], 'the red team depends on nothing: it reads raw material');
+  assert.deepEqual(dependencyRoles('scout', ['scout', 'redteam', 'analyst']), []);
+  assert.deepEqual(dependencyRoles('analyst', ['scout', 'redteam', 'analyst']), ['scout']);
+  // Canonical order, not finish order: redteam sorts before analyst.
+  assert.deepEqual(
+    dependencyRoles('redactor', ['scout', 'redteam', 'analyst', 'critique', 'redactor']),
+    ['scout', 'redteam', 'analyst', 'critique'],
+  );
+  assert.deepEqual(
+    dependencyRoles('archivist', ['scout', 'redteam', 'analyst', 'critique', 'redactor', 'archivist']),
+    ['scout', 'redteam', 'analyst', 'critique', 'redactor'],
+  );
+  // A dependency that is not enabled does not block its dependent.
+  assert.deepEqual(dependencyRoles('analyst', ['analyst']), []);
 });

@@ -94,12 +94,25 @@ confined hands, and the merge is the approval:
 
 ### The collective (lot 2, declared per capability via `subagents: [...]`)
 
-Five named roles (`src/collective.js`): **Scout** (finds material), **Analyst**
-(structures it), **Critique** (structured objections — one
-`[objection] severity: blocking|non-blocking — <path> — reason` line per
-problem, NEVER blocks), **Redactor** (writes the corrections, worktree runs
-only), **Archivist** (learned / obsolete / to re-verify). A capability's
-`subagents` list selects which roles run, in the canonical order above.
+Six named roles (`src/collective.js`): **Scout** (finds material), **Red Team**
+(lot 6 — red-teams the RAW material: thin evidence, single-source claims,
+contradictions), **Analyst** (structures it), **Critique** (structured
+objections — one `[objection] severity: blocking|non-blocking — <path> — reason`
+line per problem, NEVER blocks), **Redactor** (writes the corrections, worktree
+runs only), **Archivist** (learned / obsolete / to re-verify). A capability's
+`subagents` list selects which roles run.
+
+The roles are scheduled by a declared GRAPH, not a list
+(`COLLECTIVE_ROLE_GRAPH`): `scout` and `redteam` depend on nothing and may run
+in parallel; `analyst` depends on `scout`, `critique` on `analyst`, `redactor`
+on `analyst`/`critique`/`redteam`, `archivist` on `redactor`. Each role's input
+is its TRANSITIVE dependencies' outputs in canonical order, so a parallel finish
+order cannot reorder the context. `GATEWAY_COLLECTIVE_CONCURRENCY` is **1
+(sequential) by default** and raising it is an explicit act: the plan gates the
+parallel collective on phase metrics (p95 improves without losing an objection,
+`GET /metrics`). The first role failure while roles are in flight lowers it back
+to 1 and emits a `degraded` (`collective-concurrency`) — a silent fallback
+would hide the bug the parallel mode introduced.
 
 The per-role frontier is DECLARED, not inferred from `role === 'redactor'`:
 `ROLE_TOOL_POLICY` gives each role its tool classes (`read`, plus `worktree` for
@@ -108,12 +121,12 @@ pool — the manager's pool stays the ceiling. Any role whose declared classes
 deny part of the pool is journalled as a `notice`, so a narrowing boundary is
 auditable. An unknown role fails closed to reads.
 
-The roles run as a **sequence of bounded single-agent runs driven by the
-gateway**, each with isolated context (own system prompt, own thread
-`<workspace>:<runId>:<role>`, own boundary allow-list — the Critique has no
-write tools by construction), passing a bounded handoff section to the next;
-the main agent then assembles the final answer and must repeat unresolved
-objections verbatim under `## Objections`. The gateway emits
+The roles run as **bounded single-agent runs driven by the gateway**, each with
+isolated context (own system prompt, own thread `<workspace>:<runId>:<role>`,
+own boundary allow-list — the Critique and the Red Team have no write tools by
+construction), passing a bounded handoff section to their dependents; the main
+agent then assembles the final answer and must repeat unresolved objections
+(from Critique AND Red Team) verbatim under `## Objections`. The gateway emits
 `subagent_started` / `subagent_finished` / `tool_*` SSE events per role — the
 manager's `runtimeEventAdapter` already surfaces them.
 

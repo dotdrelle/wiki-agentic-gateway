@@ -346,7 +346,48 @@ function createEventCallbacks({ onEvent, roleNames, onToolFinished = null }) {
 // blocking, a per-role event timeline — without depending on that path, and
 // it keeps the boundary middleware on every model call of every role.
 
-const COLLECTIVE_ORDER = ['scout', 'analyst', 'critique', 'redactor', 'archivist'];
+const COLLECTIVE_ORDER = ['scout', 'redteam', 'analyst', 'critique', 'redactor', 'archivist'];
+
+/*
+ A declared DEPENDENCY graph, not a list. `scout` and `redteam` are both
+ sources of raw material and depend on nothing, so they may run in parallel;
+ the others consume what precedes them. The ASSEMBLY always receives handoffs
+ in canonical COLLECTIVE_ORDER, whatever the finish order.
+
+ Bounded locally, and SEQUENTIAL by default: `GATEWAY_COLLECTIVE_CONCURRENCY`
+ stays 1 until the phase metrics show the p95 improves without losing an
+ objection (the plan's exit criterion). Raising it is an explicit act.
+*/
+export const COLLECTIVE_ROLE_GRAPH = {
+  scout: [],
+  redteam: [],
+  analyst: ['scout'],
+  critique: ['analyst'],
+  redactor: ['analyst', 'critique', 'redteam'],
+  archivist: ['redactor'],
+};
+
+function collectiveConcurrency() {
+  const raw = Number.parseInt(process.env.GATEWAY_COLLECTIVE_CONCURRENCY ?? '', 10);
+  return Number.isFinite(raw) && raw > 1 ? raw : 1;
+}
+
+// A role's input is the output of everything it TRANSITIVELY depends on, in
+// canonical order — the sequential cumulative handoff, made explicit so a
+// parallel finish order cannot reorder the context.
+export function dependencyRoles(role, enabledRoles) {
+  const enabled = new Set(enabledRoles);
+  const seen = new Set();
+  const visit = (name) => {
+    for (const dep of COLLECTIVE_ROLE_GRAPH[name] ?? []) {
+      if (!enabled.has(dep) || seen.has(dep)) continue;
+      seen.add(dep);
+      visit(dep);
+    }
+  };
+  visit(role);
+  return COLLECTIVE_ORDER.filter((name) => seen.has(name));
+}
 
 /*
  Which roles a curation cannot do without.
@@ -435,6 +476,7 @@ async function invokeOnce({
 */
 const PHASE_BY_ROLE = {
   scout: 'discover',
+  redteam: 'redteam',
   analyst: 'analyse',
   critique: 'critique',
   redactor: 'redact',
@@ -567,14 +609,10 @@ export function createAgentRunner({
       const threadId = memory.scope;
       const roleThreadBase = `${memory.workspaceKey}:${runId ?? 'run'}`;
       const roleSet = new Set(enabledRoles);
+      // The shared tracker is the ASSEMBLY phase only: each role counts its own
+      // tools, because with roles in flight together a single global counter
+      // would attribute one role's reads to another.
       const phases = createPhaseTracker(onEvent);
-      const callbacks = onEvent
-        ? createEventCallbacks({
-            onEvent,
-            roleNames: roleSet,
-            onToolFinished: (name) => phases.countTool(name),
-          })
-        : null;
       // A refused scope is a real degradation — the run reads another memory
       // than the caller asked for — so it is announced. An ABSENT scope is the
       // normal mono-user case and says nothing.
@@ -662,13 +700,20 @@ export function createAgentRunner({
         ...(dossierSection ? ['', dossierSection] : []),
       ].join('\n');
 
-      // The collective: each named role gets one bounded run with isolated
-      // context (its own system prompt and thread), its own boundary
-      // allow-list, and passes its findings to the next role.
-      let handoffs = '';
+      // The collective: each role is one bounded run with isolated context (its
+      // own system prompt and thread), its own boundary allow-list, and a
+      // declared place in COLLECTIVE_ROLE_GRAPH. Ready roles run up to the
+      // concurrency ceiling; with the default of 1 this is the sequence it
+      // always was.
       const degradations = [];
       const roleOutputs = {};
-      for (const role of enabledRoles) {
+      const settle = new Set();
+      const running = new Map();
+      // `let`: the first parallelism incident lowers it to 1, so the rest of
+      // the collective runs sequentially and the degradation is announced.
+      let concurrency = collectiveConcurrency();
+
+      const runRole = async (role) => {
         const spec = COLLECTIVE_ROLE_SPECS[role];
         const allowed = roleAllowList({
           role,
@@ -713,9 +758,18 @@ export function createAgentRunner({
           ],
         });
         const phase = PHASE_BY_ROLE[role] ?? role;
+        // A PER-ROLE tracker: with roles in flight together, one shared
+        // "current phase" would describe none of them.
+        const phaseTracker = createPhaseTracker(onEvent);
+        const roleCallbacks = onEvent
+          ? createEventCallbacks({ onEvent, roleNames: roleSet, onToolFinished: (name) => phaseTracker.countTool(name) })
+          : null;
         onEvent?.({ type: 'subagent_started', subagent: role });
-        phases.start(phase);
-        let output;
+        phaseTracker.start(phase);
+        const handoffs = dependencyRoles(role, enabledRoles)
+          .map((dependency) => handoffSection(dependency, roleOutputs[dependency] ?? ''))
+          .join('');
+        let output = null;
         let failed = null;
         try {
           output = await invokeOnce({
@@ -723,12 +777,12 @@ export function createAgentRunner({
             input: `${baseInput}${handoffs}${procedureSection}\n\nYour task as the ${role}: ${spec.description}`,
             threadId: `${roleThreadBase}:${role}`,
             signal,
-            callbacks,
+            callbacks: roleCallbacks,
           });
         } catch (error) {
           failed = error;
         } finally {
-          phases.finish(phase, { ok: failed === null });
+          phaseTracker.finish(phase, { ok: failed === null });
           onEvent?.({ type: 'subagent_finished', subagent: role });
           // A role thread is bounded to the run: once the role finishes its
           // checkpoints have no reader, so keeping them would grow
@@ -737,21 +791,10 @@ export function createAgentRunner({
             await saver.deleteThread(`${roleThreadBase}:${role}`).catch(() => {});
           }
         }
-
         if (failed) {
           // An abort is the user cancelling: it is not a degradation to report,
           // it is the end of the run.
-          if (failed?.name === 'AbortError') {
-            if (worktreeState) {
-              await removeWorktree({
-                workspaceRoot: workspaceRootFor(runWorkspace),
-                worktreePath: worktreeState.path,
-                branch: worktreeState.branch,
-              }).catch(() => {});
-            }
-            throw failed;
-          }
-
+          if (failed?.name === 'AbortError') return { role, failed };
           const required = roleIsRequired(role, { worktree: Boolean(worktreeState) });
           const cause = failed instanceof Error ? failed.message : String(failed);
           onEvent?.({
@@ -763,33 +806,17 @@ export function createAgentRunner({
               : 'the run continues without this role, and the proposal says so',
           });
           degradations.push({ role, required, cause });
-
           // `invokeOnce` returns nothing on failure, so there is no partial
-          // handoff to rescue: what survives is what the PREVIOUS roles
-          // produced. A required role leaves the collective without material,
-          // and the branch it would have justified goes with it; an optional
-          // one must NOT take the Redactor's diff down with it — that diff is
-          // the proposal a human was going to read.
-          if (required) {
-            if (worktreeState) {
-              await removeWorktree({
-                workspaceRoot: workspaceRootFor(runWorkspace),
-                worktreePath: worktreeState.path,
-                branch: worktreeState.branch,
-              }).catch(() => {});
-            }
-            throw failed;
-          }
-          continue;
+          // handoff to rescue: what survives is what the roles already finished
+          // produced. Reporting it lets the scheduler continue (optional) or
+          // stop (required) without a partial result.
+          return { role, failed, required };
         }
-
         roleOutputs[role] = output;
-        handoffs += handoffSection(role, output);
-
-        // The Critique's objections are the findings a human decides on. They
-        // travel as events too, so the Logs carry them even when the assembly
-        // later fails to repeat them.
-        if (role === 'critique') {
+        // The Critique's and the Red Team's objections are the findings a human
+        // decides on. They travel as events too, so the Logs carry them even
+        // when the assembly later fails to repeat them.
+        if (role === 'critique' || role === 'redteam') {
           for (const objection of extractObjections(output)) {
             onEvent?.({
               type: 'finding',
@@ -801,6 +828,54 @@ export function createAgentRunner({
               ...(objection.path ? { path: objection.path } : {}),
               summary: String(objection.statement ?? '').slice(0, 300),
             });
+          }
+        }
+        return { role, output };
+      };
+
+      const cleanupWorktree = async () => {
+        if (!worktreeState) return;
+        await removeWorktree({
+          workspaceRoot: workspaceRootFor(runWorkspace),
+          worktreePath: worktreeState.path,
+          branch: worktreeState.branch,
+        }).catch(() => {});
+      };
+
+      while (settle.size < enabledRoles.length) {
+        const ready = enabledRoles.filter((role) => !settle.has(role) && !running.has(role)
+          && (COLLECTIVE_ROLE_GRAPH[role] ?? []).every((dep) => !enabledRoles.includes(dep) || settle.has(dep)));
+        // A graph with no ready role and nothing in flight cannot progress:
+        // refuse rather than spin (a cycle, or a dependency on a skipped role).
+        if (ready.length === 0 && running.size === 0) break;
+        for (const role of ready) {
+          if (running.size >= concurrency) break;
+          running.set(role, runRole(role));
+        }
+        if (running.size === 0) continue;
+        const settled = await Promise.race(running.values());
+        running.delete(settled.role);
+        settle.add(settled.role);
+        if (settled.failed) {
+          if (settled.failed?.name === 'AbortError') {
+            await cleanupWorktree();
+            throw settled.failed;
+          }
+          // First incident while roles were in flight: fall back to the
+          // sequential path and SAY so. A silent fallback would hide the very
+          // bug the parallel mode might have introduced.
+          if (concurrency > 1) {
+            onEvent?.({
+              type: 'degraded',
+              capability: 'collective-concurrency',
+              cause: `role ${settled.role} failed while roles were in flight`,
+              fallback: 'falling back to sequential roles for the rest of the run',
+            });
+            concurrency = 1;
+          }
+          if (settled.required) {
+            await cleanupWorktree();
+            throw settled.failed;
           }
         }
       }
@@ -815,7 +890,7 @@ export function createAgentRunner({
             '## Collective findings',
             ...enabledRoles.map((role) => `${role}: ${String(roleOutputs[role] ?? '').slice(0, 8000)}`),
             '',
-            'Assemble the findings into ONE final answer. Any "[objection]" lines produced by the Critique MUST be repeated verbatim under a "## Objections" heading — unresolved objections travel with the diff, they never block it.',
+            'Assemble the findings into ONE final answer. Any "[objection]" lines produced by the Critique or the Red Team MUST be repeated verbatim under a "## Objections" heading — unresolved objections travel with the diff, they never block it.',
           ].join('\n')
         : baseInput;
 
@@ -834,6 +909,11 @@ export function createAgentRunner({
 
       let events;
       const refusedParams = [];
+      // The assembly's own callbacks, on the shared tracker: its tool calls are
+      // the assemble phase's, and there is exactly one assembly.
+      const assemblyCallbacks = onEvent
+        ? createEventCallbacks({ onEvent, roleNames: roleSet, onToolFinished: (name) => phases.countTool(name) })
+        : null;
       phases.start('assemble');
       try {
         events = await mainAgent.invoke(
@@ -842,7 +922,7 @@ export function createAgentRunner({
             recursionLimit: GATEWAY_RECURSION_LIMIT,
             ...(signal ? { signal } : {}),
             configurable: { thread_id: threadId },
-            ...(callbacks ? { callbacks } : {}),
+            ...(assemblyCallbacks ? { callbacks: assemblyCallbacks } : {}),
           },
         );
       } catch (error) {
@@ -863,7 +943,7 @@ export function createAgentRunner({
               recursionLimit: GATEWAY_RECURSION_LIMIT,
               ...(signal ? { signal } : {}),
               configurable: { thread_id: threadId },
-              ...(callbacks ? { callbacks } : {}),
+              ...(assemblyCallbacks ? { callbacks: assemblyCallbacks } : {}),
             },
           );
         } else {
