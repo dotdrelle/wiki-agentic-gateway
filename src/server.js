@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createAgentRunner } from './agent.js';
-import { pruneStaleWorktrees } from './worktree.js';
+import { pruneStaleWorktrees, workspaceRootFor } from './worktree.js';
+import { describeProcedures, loadProcedureRegistry } from './procedures.js';
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
@@ -252,6 +253,19 @@ export function startGateway({
     }
     if (request.method === 'GET' && path === '/capabilities') {
       return sendJson(response, 200, config?.capabilities ?? []);
+    }
+    // The procedure diagnostic: what exists, what a later scope shadowed, what
+    // is malformed, and the tools each one declares. Read-only; execution still
+    // goes through the gateway and the role contract.
+    if (request.method === 'GET' && path === '/procedures') {
+      const workspace = url.searchParams.get('workspace');
+      let workspaceRoot = null;
+      try {
+        workspaceRoot = workspace ? workspaceRootFor(workspace) : null;
+      } catch {
+        workspaceRoot = null;
+      }
+      return sendJson(response, 200, describeProcedures(loadProcedureRegistry({ workspaceRoot })));
     }
     if (request.method === 'POST' && path === '/runs') {
       return readBody(request, async (body) => {

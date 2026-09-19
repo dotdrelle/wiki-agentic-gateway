@@ -124,6 +124,34 @@ that dependency, and the frontier test stays authoritative either way. If a
 future deepagents version fixes the subagent path, this is the seam to
 re-evaluate — the role specs and the event vocabulary stay unchanged.
 
+## Procedures (lot 5b)
+
+Reusable instructions a role can load — NOT "skills": the product already owns
+that word for `.wiki/skills/` + the compiler. Another owner, another format,
+another executor, another trust model.
+
+- three scopes, precedence base (shipped) → team (`GATEWAY_PROCEDURES_TEAM_DIR`)
+  → workspace (`<workspace>/.wiki/procedures`). A later scope WINS a name clash
+  and the shadowed definition is reported, never arbitrated in silence. Each
+  procedure is `<scope>/<name>/SKILL.md`, YAML frontmatter (`name`,
+  `description`, `roles`, `tools`, optional `version`/`license`/`source`/
+  `risk`/`resources`);
+- the catalogue a role is shown is SANITIZED (name, description, scope, risk,
+  tools) and offers ONLY a procedure whose declared `tools` are all inside the
+  role's allow-list — a procedure can never widen the frontier. The body is
+  fetched on demand through `gateway__read_skill`, the one enumerated addition
+  to the MCP pool (`frontier.test.js` pins it), read-only, bounded, and confined
+  by `confineForRead` to the procedure's own directory;
+- a body is UNTRUSTED reference material, framed as data in the prompt: bounding
+  the tools does not bound the text, and the human-in-the-loop remains the
+  mitigation for any side effect;
+- `src/procedureImporter.js` accepts the compatible subset of the Claude/Codex
+  `SKILL.md` format and produces an explicit report (`imported` / `adapted` /
+  `refused` with reason). A procedure that needs a shell, a browser, a secret or
+  a direct write is refused, never imported silently;
+- `GET /procedures` is the read-only diagnostic: available, shadowed and
+  malformed entries with their declared prerequisites.
+
 ## Memory
 
 The Deep Agent keeps a **conversation memory per workspace**: the MAIN run is

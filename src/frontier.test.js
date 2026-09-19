@@ -5,6 +5,7 @@ import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
 import {
   GATEWAY_BUILTIN_TOOL_NAMES,
+  GATEWAY_INTERNAL_TOOL_NAMES,
   ROLE_TOOL_POLICY,
   buildGatewayAgent,
   createGatewayBoundaryMiddleware,
@@ -169,4 +170,33 @@ test('the declared policy is the only source of a role tool class', () => {
     roleAllowList({ role: 'nobody', mcpToolNames: ['wiki__wiki_read_page'], worktreeToolNames: ['write_file'] }),
     ['wiki__wiki_read_page'],
   );
+});
+
+test('gateway__read_skill is the ONLY tool the gateway adds to the MCP pool', async () => {
+  // The frontier contract gains exactly one named exception, listed here so a
+  // second gateway tool cannot slip in unnoticed.
+  assert.deepEqual(GATEWAY_INTERNAL_TOOL_NAMES, ['gateway__read_skill']);
+
+  const seen = [];
+  const fakeModel = new FakeListChatModel({
+    responses: [new AIMessage({ content: 'done' })],
+  });
+  const mcpTool = tool(async () => 'ok', {
+    name: 'wiki__wiki_read_page', description: 'read', schema: z.object({ path: z.string() }),
+  });
+  const readTool = tool(async () => 'body', {
+    name: 'gateway__read_skill', description: 'read a procedure', schema: z.object({ name: z.string() }),
+  });
+  const agent = buildGatewayAgent({
+    chatModel: fakeModel,
+    tools: [mcpTool, readTool],
+    onModelCall: (names) => seen.push(...names),
+  });
+  await agent.invoke({ messages: [{ role: 'user', content: 'go' }] }, { recursionLimit: 6 });
+
+  const unique = [...new Set(seen)].sort();
+  assert.deepEqual(unique, ['gateway__read_skill', 'wiki__wiki_read_page']);
+  for (const name of GATEWAY_BUILTIN_TOOL_NAMES) {
+    assert.ok(!unique.includes(name), `harness default tool "${name}" must never reach the model`);
+  }
 });

@@ -232,3 +232,19 @@ test('a finished run closes its stream and is purged after its TTL', async () =>
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('the procedure diagnostic lists the registry without executing anything', async () => {
+  const server = startGateway({
+    port: 0,
+    config: { version: 'test', capabilities: [{ name: 'agent.review', operations: ['run'] }], authToken: null },
+  });
+  const port = server.address().port;
+  try {
+    const report = await fetch(`http://127.0.0.1:${port}/procedures`).then((response) => response.json());
+    assert.ok(Array.isArray(report.available));
+    assert.ok(Array.isArray(report.conflicts));
+    assert.ok(Array.isArray(report.issues));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

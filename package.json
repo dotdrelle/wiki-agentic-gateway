@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node ./bin/wiki-agentic-gateway.js",
-    "test": "node --test src/server.test.js src/frontier.test.js src/worktree.test.js src/collective.test.js src/runActivity.test.js src/dossier.test.js"
+    "test": "node --test src/server.test.js src/frontier.test.js src/worktree.test.js src/collective.test.js src/runActivity.test.js src/dossier.test.js src/procedures.test.js"
   },
   "engines": {
     "node": ">=22.0.0"
