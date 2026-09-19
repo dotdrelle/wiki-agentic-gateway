@@ -25,6 +25,14 @@ export function startGateway({
 } = {}) {
   const runs = new Map();
   let sequence = 0;
+  // One identity per process: a cursor is only meaningful inside the instance
+  // that produced it. A reconnect carrying another epoch is a gateway restart,
+  // and the correct answer is "no replay", never a mixed history.
+  const STREAM_EPOCH = randomUUID();
+  // Same discipline as the manager's MAX_SESSION_EVENTS: an unbounded buffer
+  // made replay and memory grow with everything a run had ever emitted.
+  const MAX_RUN_EVENTS = Number(process.env.GATEWAY_MAX_RUN_EVENTS ?? 5000);
+  const RUN_TTL_MS = Number(process.env.GATEWAY_RUN_TTL_MS ?? 10 * 60 * 1000);
 
   function nextRunId() {
     sequence += 1;
@@ -56,8 +64,22 @@ export function startGateway({
       ts: now().toISOString(),
       sequence: run.sequence++,
     };
-    if (!EPHEMERAL_EVENT_TYPES.has(String(event?.type))) run.events.push(stamped);
-    for (const write of run.streams) write(stamped);
+    if (!EPHEMERAL_EVENT_TYPES.has(String(event?.type))) {
+      run.events.push(stamped);
+      // What the ceiling drops is remembered, so a cursor older than the
+      // buffer is TOLD events were lost instead of silently resuming on a gap.
+      if (Number.isFinite(MAX_RUN_EVENTS) && MAX_RUN_EVENTS > 0 && run.events.length > MAX_RUN_EVENTS) {
+        const overflow = run.events.splice(0, run.events.length - MAX_RUN_EVENTS);
+        run.droppedThrough = Math.max(
+          run.droppedThrough ?? 0,
+          ...overflow.map((entry) => Number(entry.sequence) || 0),
+        );
+        console.warn(
+          `gateway: run ${run.runId} event buffer trimmed by ${overflow.length} (ceiling ${MAX_RUN_EVENTS})`,
+        );
+      }
+    }
+    for (const stream of run.streams) stream.write(stamped);
   }
 
   /*
@@ -186,25 +208,34 @@ export function startGateway({
           : {}),
       };
       run.worktreeProposal = output?.worktreeProposal ?? null;
-      run.status = 'completed';
+      // The terminal event is in the buffer BEFORE the status says terminal: a
+      // poll that sees "completed" must be able to replay the event that says
+      // so. The reverse order let a fast reader connect in the window, get a
+      // closed stream and no `run_completed`.
       emit(run, { type: 'message', content });
       emit(run, { type: 'run_completed' });
+      run.status = 'completed';
     } catch (error) {
       if (error?.name === 'AbortError' || run.aborted) {
-        run.status = 'cancelled';
         emit(run, { type: 'run_cancelled' });
+        run.status = 'cancelled';
         return;
       }
-      run.status = 'failed';
       run.error = error instanceof Error ? error.message : String(error);
       // The operator watches this console: say WHY, like the manager does.
       console.error(`run ${run.runId} failed: ${run.error}`);
       emit(run, { type: 'run_failed', error: run.error });
+      run.status = 'failed';
     } finally {
       // Every exit, without exception: the beat must not outlive the work it
       // claims. A timer left armed is both a false liveness signal and a
       // handle holding the run object alive.
       stopHeartbeat(run);
+      run.finishedAt = Date.now();
+      // A finished run closes its streams: a subscriber must not hang on a
+      // connection that will never carry another event.
+      for (const stream of run.streams) stream.close();
+      run.streams.clear();
     }
   }
 
@@ -260,6 +291,8 @@ export function startGateway({
           events: [],
           streams: new Set(),
           sequence: 0,
+          droppedThrough: 0,
+          finishedAt: null,
           controller: new AbortController(),
           resolveApproval: null,
           rejectApproval: null,
@@ -285,10 +318,45 @@ export function startGateway({
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
         });
-        for (const event of run.events) response.write(`data: ${JSON.stringify(event)}\n\n`);
-        const write = (event) => response.write(`data: ${JSON.stringify(event)}\n\n`);
-        run.streams.add(write);
-        request.on('close', () => run.streams.delete(write));
+        const asFrame = (event) => response.write(`data: ${JSON.stringify(event)}\n\n`);
+        // Always first: the client learns which instance it is talking to
+        // before it decides to trust its cursor.
+        asFrame({ type: 'stream_epoch', epoch: STREAM_EPOCH, ts: now().toISOString() });
+        const requestedEpoch = url.searchParams.get('epoch');
+        if (requestedEpoch && requestedEpoch !== STREAM_EPOCH) {
+          asFrame({
+            type: 'degraded',
+            capability: 'stream',
+            cause: 'the gateway restarted since the last cursor',
+            fallback: 'reconnect from a fresh subscription; no events were replayed',
+          });
+          return response.end();
+        }
+        const afterRaw = url.searchParams.get('after');
+        const after = afterRaw != null && afterRaw !== '' ? Number(afterRaw) : null;
+        if (Number.isFinite(after) && after < (run.droppedThrough ?? 0)) {
+          asFrame({
+            type: 'degraded',
+            capability: 'stream',
+            cause: `events up to sequence ${run.droppedThrough} left the runtime buffer`,
+            fallback: 'replaying only the events still retained',
+          });
+        }
+        // Replay strictly AFTER the cursor: a reconnect must never duplicate an
+        // event the client already delivered.
+        const replay = Number.isFinite(after)
+          ? run.events.filter((event) => Number(event.sequence) > after)
+          : run.events;
+        for (const event of replay) asFrame(event);
+        // A finished run has no live tail: close rather than let a subscriber
+        // hang on a connection that will never carry another event.
+        if (TERMINAL.has(run.status)) return response.end();
+        const stream = {
+          write: asFrame,
+          close: () => { try { response.end(); } catch { /* already closed */ } },
+        };
+        run.streams.add(stream);
+        request.on('close', () => run.streams.delete(stream));
         return;
       }
       if (sub === '/cancel' && request.method === 'POST') {
@@ -339,6 +407,20 @@ export function startGateway({
       console.warn(`pruned ${result.pruned.length} stale agent worktree(s): ${result.pruned.map((entry) => `${entry.workspace}/${entry.runId}`).join(', ')}`);
     }
   }).catch(() => {});
+  // A finished run is kept only long enough for a late status poll; after that
+  // its buffer and streams are pure memory. The purge is logged.
+  const sweeper = setInterval(() => {
+    const cutoff = Date.now() - RUN_TTL_MS;
+    for (const [id, run] of runs) {
+      if (!TERMINAL.has(run.status)) continue;
+      if (!run.finishedAt || run.finishedAt > cutoff) continue;
+      for (const stream of run.streams) stream.close();
+      runs.delete(id);
+      console.warn(`gateway: purged finished run ${id}`);
+    }
+  }, Math.max(1_000, Math.min(60_000, RUN_TTL_MS)));
+  sweeper.unref?.();
+  server.on('close', () => clearInterval(sweeper));
   return server;
 }
 

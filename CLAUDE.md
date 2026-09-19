@@ -163,6 +163,17 @@ The memory is BOUNDED, in three pieces that ship together:
   injected section. A missing or unwritable volume emits `degraded` and the run
   continues without memory — a lost memory never loses the run.
 
+## Transport
+
+The SSE route is a cursor protocol, not a fire hose. Each stream's first frame
+is `stream_epoch` (one identity per process). `/runs/:id/events` honours
+`?after=<sequence>` by replaying strictly after it, and `?epoch=<id>` by
+refusing a mixed history — a different epoch emits a `degraded` and closes, no
+replay. `run.events` is bounded (`GATEWAY_MAX_RUN_EVENTS`, default 5000) and
+finished runs are purged after `GATEWAY_RUN_TTL_MS` (default 10 min); a cursor
+older than what the buffer retains is told events were lost. A stream is closed
+once its run is terminal, so a subscriber never hangs on a dead tail.
+
 ## Layout
 
 
