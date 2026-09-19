@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 
-import { confineForRead } from './worktree.js';
+import { confineForReadSync } from './worktree.js';
 
 /*
  Gateway PROCEDURES: reusable, role-scoped instructions loaded into a role's
@@ -62,12 +62,16 @@ export function isValidProcedureName(name) {
   return /^[a-z0-9][a-z0-9_-]*$/i.test(String(name ?? ''));
 }
 
-function toEntry(scope, fallbackName, data, dir) {
+function toEntry(scope, fallbackName, data, scopeDir, relativePath) {
   return {
     schemaVersion: PROCEDURE_SCHEMA_VERSION,
     scope,
     name: String(data.name ?? fallbackName),
-    dir,
+    // The CONTAINMENT ROOT is the scope directory, not the procedure's own
+    // directory: a check rooted at the thing it inspects proves nothing when
+    // the thing itself is a link. `relativePath` joins them.
+    scopeDir,
+    relativePath,
     description: String(data.description ?? '').trim(),
     version: data.version != null ? String(data.version) : null,
     license: data.license != null ? String(data.license) : null,
@@ -98,8 +102,17 @@ export function loadProcedureRegistry({ workspaceRoot = null, baseDir = BASE_PRO
     }
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const skillPath = join(dir, entry.name, 'SKILL.md');
-      if (!existsSync(skillPath)) continue;
+      const relativePath = `${entry.name}/SKILL.md`;
+      let skillPath;
+      try {
+        // Confined AT LOAD, not only on the body read: the metadata reaches the
+        // catalogue, hence the role's prompt — an unconfined read here leaked a
+        // file from outside the registry through the description.
+        skillPath = confineForReadSync(dir, relativePath);
+      } catch {
+        issues.push({ name: entry.name, scope, reason: 'SKILL.md resolves outside the scope root' });
+        continue;
+      }
       let raw;
       try {
         raw = readFileSync(skillPath, 'utf8');
@@ -107,7 +120,7 @@ export function loadProcedureRegistry({ workspaceRoot = null, baseDir = BASE_PRO
         continue;
       }
       const { data } = parseProcedureFile(raw);
-      const procedure = toEntry(scope, entry.name, data, join(dir, entry.name));
+      const procedure = toEntry(scope, entry.name, data, dir, relativePath);
       if (!isValidProcedureName(procedure.name)) {
         issues.push({ name: procedure.name, scope, reason: 'invalid procedure name' });
         continue;
@@ -151,11 +164,21 @@ export function procedureCatalogue(registry, { role = null, allowedToolNames = [
  * canonical check, so a symlinked `SKILL.md` cannot serve a file from outside
  * the registry, and bounded so a huge page cannot flood the context.
  */
-export async function readProcedureBody(registry, name) {
+export async function readProcedureBody(registry, name, { role = null, allowedToolNames = null } = {}) {
   const procedure = registry.procedures.get(String(name));
   if (!procedure) return { error: `unknown procedure "${name}"` };
+  // Fail closed: a body is readable only THROUGH a role context. The catalogue
+  // hides what a role may not use; the reader must replay the same filter, or
+  // the scope stops at the menu and any role reads any body by name.
+  if (role == null || !Array.isArray(allowedToolNames)) {
+    return { error: 'procedure access requires a role and the run allow-list' };
+  }
+  const allowed = new Set(allowedToolNames.map(String));
+  if (!procedure.roles.includes(String(role)) || procedure.tools.some((tool) => !allowed.has(tool))) {
+    return { error: `procedure "${name}" is not available to role "${role}"` };
+  }
   try {
-    const skillPath = await confineForRead(procedure.dir, 'SKILL.md');
+    const skillPath = confineForReadSync(procedure.scopeDir, procedure.relativePath);
     const raw = readFileSync(skillPath, 'utf8');
     const { body } = parseProcedureFile(raw);
     const truncated = body.length > PROCEDURE_BODY_MAX;
@@ -176,7 +199,7 @@ export async function readProcedureBody(registry, name) {
 export function describeProcedures(registry) {
   return {
     available: [...registry.procedures.values()]
-      .map(({ dir, ...procedure }) => procedure)
+      .map(({ scopeDir, relativePath, ...procedure }) => procedure)
       .sort((a, b) => a.name.localeCompare(b.name)),
     conflicts: [...registry.conflicts],
     issues: [...registry.issues],

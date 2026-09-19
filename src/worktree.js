@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, readdir, realpath, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
@@ -186,21 +186,25 @@ export async function confineForWrite(root, input) {
 // link out of the worktree. Canonicalise the target when it exists (a file
 // symlink), else its deepest existing ancestor (a symlinked parent), and verify
 // it is really under the worktree's real root.
-export async function confineForRead(root, input) {
+export function confineForReadSync(root, input) {
   const resolved = confinePath(root, input);
-  const realRoot = await realpath(root);
+  const realRoot = realpathSync(root);
   let probe = existsSync(resolved) ? resolved : dirname(resolved);
   while (!existsSync(probe)) {
     const up = dirname(probe);
     if (up === probe) break;
     probe = up;
   }
-  const realProbe = await realpath(probe);
+  const realProbe = realpathSync(probe);
   const rel = relative(realRoot, realProbe);
   if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error(`path resolves outside the worktree: ${input}`);
   }
   return resolved;
+}
+
+export async function confineForRead(root, input) {
+  return confineForReadSync(root, input);
 }
 
 /**

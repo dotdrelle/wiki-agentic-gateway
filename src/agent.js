@@ -172,9 +172,12 @@ export const GATEWAY_WORKTREE_TOOL_NAMES = [
 // still never grants the model.
 export const GATEWAY_INTERNAL_TOOL_NAMES = ['gateway__read_skill'];
 
-export function createProcedureReadTool(registry) {
+export function createProcedureReadTool(registry, { role = null, allowedToolNames = [] } = {}) {
   return tool(
-    async ({ name }) => JSON.stringify(await readProcedureBody(registry, name)),
+    // The role and the run's allow-list are bound to the TOOL, not trusted to
+    // the model: reading a body replays the same filter that built the
+    // catalogue, so a role can never read a procedure it was not offered.
+    async ({ name }) => JSON.stringify(await readProcedureBody(registry, name, { role, allowedToolNames })),
     {
       name: GATEWAY_INTERNAL_TOOL_NAMES[0],
       description:
@@ -683,7 +686,7 @@ export function createAgentRunner({
         // there is something to read.
         const catalogue = procedureCatalogue(procedureRegistry, { role, allowedToolNames: allowed });
         const roleTools = catalogue.length > 0
-          ? [...tools, createProcedureReadTool(procedureRegistry)]
+          ? [...tools, createProcedureReadTool(procedureRegistry, { role, allowedToolNames: allowed })]
           : tools;
         const roleAllowed = catalogue.length > 0
           ? [...allowed, ...GATEWAY_INTERNAL_TOOL_NAMES]

@@ -148,8 +148,13 @@ another executor, another trust model.
   tools) and offers ONLY a procedure whose declared `tools` are all inside the
   role's allow-list — a procedure can never widen the frontier. The body is
   fetched on demand through `gateway__read_skill`, the one enumerated addition
-  to the MCP pool (`frontier.test.js` pins it), read-only, bounded, and confined
-  by `confineForRead` to the procedure's own directory;
+  to the MCP pool (`frontier.test.js` pins it): bounded, and the reader REPLAYS
+  the same role filter, so a role can only read a body its catalogue offered
+  (a hidden procedure is not readable by name);
+- every `SKILL.md` is confined to its SCOPE directory — at load AND on the body
+  read — so a symlinked `SKILL.md` is neither enumerated nor able to leak its
+  metadata through the catalogue and into a role's prompt. The containment root
+  is the scope, never the procedure's own (linked) directory;
 - a body is UNTRUSTED reference material, framed as data in the prompt: bounding
   the tools does not bound the text, and the human-in-the-loop remains the
   mitigation for any side effect;

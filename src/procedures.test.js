@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,25 +70,62 @@ test('the catalogue offers only a role whose tools it actually has', () => {
   }
 });
 
-test('the body is read on demand, bounded, and cannot escape its directory', async () => {
+test('the body is read on demand, bounded, and only through a role context', async () => {
   const base = tempRoot('proc-body-');
-  const outside = tempRoot('proc-out-');
   try {
     makeProcedure(base, 'audit-cost', 'name: audit-cost\ndescription: d\nroles: [critique]', { body: 'STEP 1' });
     const registry = loadProcedureRegistry({ baseDir: base, teamDir: null });
+    const access = { role: 'critique', allowedToolNames: [] };
 
-    const read = await readProcedureBody(registry, 'audit-cost');
+    const read = await readProcedureBody(registry, 'audit-cost', access);
     assert.equal(read.name, 'audit-cost');
     assert.match(read.body, /STEP 1/);
-    assert.deepEqual((await readProcedureBody(registry, 'nope')), { error: 'unknown procedure "nope"' });
+    assert.deepEqual((await readProcedureBody(registry, 'nope', access)), { error: 'unknown procedure "nope"' });
 
-    // A SKILL.md symlinked to a file outside the procedure directory is refused.
-    writeFileSync(join(outside, 'SKILL.md'), '---\nname: audit-cost\ndescription: d\n---\nSECRET');
-    unlinkSync(join(base, 'audit-cost', 'SKILL.md'));
-    symlinkSync(join(outside, 'SKILL.md'), join(base, 'audit-cost', 'SKILL.md'));
-    const reloaded = loadProcedureRegistry({ baseDir: base, teamDir: null });
-    const escaped = await readProcedureBody(reloaded, 'audit-cost');
-    assert.match(String(escaped.error ?? ''), /resolves outside the worktree/);
+    // No role context, no body: fail closed rather than a scopeless reader.
+    const unguarded = await readProcedureBody(registry, 'audit-cost');
+    assert.match(String(unguarded.error), /requires a role/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a role cannot read a body its catalogue did not offer', async () => {
+  const base = tempRoot('proc-scope-');
+  try {
+    makeProcedure(base, 'public', 'name: public\ndescription: shared\nroles: [scout, redactor]');
+    makeProcedure(base, 'private', 'name: private\ndescription: redactor only\nroles: [redactor]\ntools: [write_file]');
+    const registry = loadProcedureRegistry({ baseDir: base, teamDir: null });
+
+    const scoutTools = ['wiki__wiki_read_page'];
+    assert.deepEqual(
+      procedureCatalogue(registry, { role: 'scout', allowedToolNames: scoutTools }).map((entry) => entry.name),
+      ['public'],
+    );
+    // The catalogue hid it; the reader must too, or the scope stops at the menu.
+    const refused = await readProcedureBody(registry, 'private', { role: 'scout', allowedToolNames: scoutTools });
+    assert.match(String(refused.error), /not available to role "scout"/);
+
+    const ok = await readProcedureBody(registry, 'private', { role: 'redactor', allowedToolNames: ['write_file'] });
+    assert.match(String(ok.body), /Do the thing/);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a SKILL.md symlinked outside the scope is not enumerated, so its metadata never leaks', () => {
+  const base = tempRoot('proc-load-');
+  const outside = tempRoot('proc-out-');
+  try {
+    mkdirSync(join(base, 'leaky'), { recursive: true });
+    writeFileSync(join(outside, 'SKILL.md'), '---\nname: leaky\ndescription: SECRET HORS REGISTRE\nroles: [scout]\n---\nBODY');
+    symlinkSync(join(outside, 'SKILL.md'), join(base, 'leaky', 'SKILL.md'));
+
+    const registry = loadProcedureRegistry({ baseDir: base, teamDir: null });
+    assert.ok(!registry.procedures.has('leaky'), 'the linked procedure is not enumerated');
+    assert.ok(registry.issues.some((issue) => issue.name === 'leaky' && /outside the scope root/.test(issue.reason)));
+    const catalogue = procedureCatalogue(registry, { role: 'scout', allowedToolNames: [] });
+    assert.ok(!JSON.stringify(catalogue).includes('SECRET HORS REGISTRE'), 'no metadata from outside the scope');
   } finally {
     rmSync(base, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
