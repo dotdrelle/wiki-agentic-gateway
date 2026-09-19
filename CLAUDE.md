@@ -99,6 +99,13 @@ problem, NEVER blocks), **Redactor** (writes the corrections, worktree runs
 only), **Archivist** (learned / obsolete / to re-verify). A capability's
 `subagents` list selects which roles run, in the canonical order above.
 
+The per-role frontier is DECLARED, not inferred from `role === 'redactor'`:
+`ROLE_TOOL_POLICY` gives each role its tool classes (`read`, plus `worktree` for
+the Redactor alone), and the effective set is the intersection with the run's
+pool — the manager's pool stays the ceiling. Any role whose declared classes
+deny part of the pool is journalled as a `notice`, so a narrowing boundary is
+auditable. An unknown role fails closed to reads.
+
 The roles run as a **sequence of bounded single-agent runs driven by the
 gateway**, each with isolated context (own system prompt, own thread
 `<workspace>:<runId>:<role>`, own boundary allow-list — the Critique has no

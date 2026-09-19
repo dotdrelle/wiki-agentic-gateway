@@ -337,10 +337,33 @@ function roleIsRequired(role, { worktree = false } = {}) {
   return REQUIRED_ROLES.has(role);
 }
 
-function roleAllowList({ role, mcpToolNames, worktreeToolNames }) {
-  return role === 'redactor'
-    ? [...mcpToolNames, ...worktreeToolNames]
-    : mcpToolNames;
+/*
+ The per-role frontier, DECLARED rather than inferred from `role === 'redactor'`.
+
+ The run's pool is the ceiling (the manager decides what reaches the runtime);
+ a role's declared classes are a floor it may not exceed. The effective set is
+ the intersection of the two. Today the only write class is the worktree, so the
+ visible reduction is the read roles being explicitly denied it — and it is
+ journalled, because a boundary that narrows in silence is a boundary nobody
+ can audit. Procedures (lot 5b) plug their required tools into this same table.
+*/
+export const ROLE_TOOL_POLICY = {
+  scout: ['read'],
+  analyst: ['read'],
+  critique: ['read'],
+  archivist: ['read'],
+  redactor: ['read', 'worktree'],
+};
+
+export function roleAllowList({ role, mcpToolNames = [], worktreeToolNames = [], onReduction = null }) {
+  const classes = ROLE_TOOL_POLICY[role] ?? ['read'];
+  const allowed = new Set(classes.includes('read') ? mcpToolNames : []);
+  if (classes.includes('worktree')) {
+    for (const name of worktreeToolNames) allowed.add(name);
+  }
+  const reduced = [...mcpToolNames, ...worktreeToolNames].filter((name) => !allowed.has(name));
+  if (reduced.length > 0) onReduction?.({ role, reduced });
+  return [...allowed];
 }
 
 // The handoff context one role passes to the next: findings so far, bounded
@@ -600,7 +623,16 @@ export function createAgentRunner({
       const roleOutputs = {};
       for (const role of enabledRoles) {
         const spec = COLLECTIVE_ROLE_SPECS[role];
-        const allowed = roleAllowList({ role, mcpToolNames, worktreeToolNames });
+        const allowed = roleAllowList({
+          role,
+          mcpToolNames,
+          worktreeToolNames,
+          onReduction: ({ reduced }) => onEvent?.({
+            type: 'notice',
+            topic: 'role-tools',
+            detail: `${role} is limited to its declared tool classes; denied ${reduced.length}: ${reduced.join(', ')}`,
+          }),
+        });
         const roleAgent = buildGatewayAgent({
           chatModel: chatModelOverride ?? (await resolveChatModel()),
           tools,

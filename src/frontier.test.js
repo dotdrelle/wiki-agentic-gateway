@@ -5,8 +5,10 @@ import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
 import {
   GATEWAY_BUILTIN_TOOL_NAMES,
+  ROLE_TOOL_POLICY,
   buildGatewayAgent,
   createGatewayBoundaryMiddleware,
+  roleAllowList,
   resolveMemoryScope,
 } from './agent.js';
 
@@ -134,4 +136,37 @@ test('an oversized scope is refused rather than used as a thread key', () => {
   const refused = resolveMemoryScope({ supplied: `acme:${'a'.repeat(400)}`, workspace: 'acme' });
   assert.equal(refused.scope, 'acme');
   assert.match(refused.degraded.cause, /maximum length/);
+});
+
+test('the per-role frontier is declared and never widens a read role', () => {
+  const mcpToolNames = ['wiki__wiki_read_page', 'wiki__wiki_search_context'];
+  const worktreeToolNames = ['read_file', 'write_file', 'edit_file'];
+
+  const redactor = roleAllowList({ role: 'redactor', mcpToolNames, worktreeToolNames });
+  assert.deepEqual(redactor, [...mcpToolNames, ...worktreeToolNames]);
+
+  for (const role of ['scout', 'analyst', 'critique', 'archivist']) {
+    const reductions = [];
+    const allowed = roleAllowList({
+      role,
+      mcpToolNames,
+      worktreeToolNames,
+      onReduction: (entry) => reductions.push(entry),
+    });
+    assert.deepEqual(allowed, mcpToolNames, `${role} sees the read pool only`);
+    assert.ok(!allowed.some((name) => worktreeToolNames.includes(name)), `${role} never gets a write tool`);
+    // The reduction is journalled: a boundary that narrows in silence is not auditable.
+    assert.equal(reductions.length, 1);
+    assert.deepEqual(reductions[0].reduced, worktreeToolNames);
+  }
+});
+
+test('the declared policy is the only source of a role tool class', () => {
+  assert.deepEqual(ROLE_TOOL_POLICY.scout, ['read']);
+  assert.deepEqual(ROLE_TOOL_POLICY.redactor, ['read', 'worktree']);
+  // An unknown role fails closed to reads.
+  assert.deepEqual(
+    roleAllowList({ role: 'nobody', mcpToolNames: ['wiki__wiki_read_page'], worktreeToolNames: ['write_file'] }),
+    ['wiki__wiki_read_page'],
+  );
 });
