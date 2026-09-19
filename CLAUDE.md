@@ -117,14 +117,51 @@ re-evaluate — the role specs and the event vocabulary stay unchanged.
 
 ## Memory
 
-The Deep Agent keeps a **conversation memory per workspace**: every run is
-invoked with `configurable.thread_id = <workspace name>` (the manager sends the
-workspace with each run), and the thread state is checkpointed to
+The Deep Agent keeps a **conversation memory per workspace**: the MAIN run is
+invoked with `configurable.thread_id = <memory scope>` — the workspace name
+today — and the thread state is checkpointed to
 `<GATEWAY_CONFIG_DIR>/memory.sqlite` (SqliteSaver, one saver per process). A
-workspace's run therefore resumes its previous thread — across runs and across
+workspace's run therefore resumes its previous thread, across runs and across
 gateway restarts. A request without a workspace lands on the `default` thread.
-Do not key threads on anything else: per-run ids would silently disable the
-memory the boundary advertises.
+Do not key the main thread on anything else: per-run ids silently disabled the
+memory this section advertises, for several releases.
+
+`resolveMemoryScope` (`src/agent.js`) owns the namespace, because a thread key
+IS a read capability — it decides whose past conversation this run resumes. A
+`memoryScope` sent by the manager may only REFINE the workspace the gateway
+resolved (`<workspace>:<actorId>`, the multi-user shape); anything else — a
+different workspace, a traversal, an unbounded string — falls back to the
+workspace and emits `degraded`. An absent scope is the normal single-user case
+and is NOT a degradation.
+
+The collective's **role threads stay bounded to one run**
+(`<workspace>:<runId>:<role>`), and are deliberately not derived from the main
+thread: they were, so making the main thread stable would have made them stable
+by side effect. A Critique re-raising an objection settled three runs ago
+degrades the collective instead of helping it. Their checkpoints are deleted
+once the role finishes — bounded to the run means no reader afterwards.
+
+The memory is BOUNDED, in three pieces that ship together:
+
+- the **workspace dossier** (`src/dossier.js`) is the durable digest of the
+  thread — the Archivist's factual memory and the unresolved objections — in
+  its OWN table of the same `memory.sqlite` (not a second saver, not a second
+  file). The next run reads it as a bounded `## Workspace memory` section, so a
+  rotation costs the transcript, never the conclusions. A write MERGES: an
+  empty run never clears the summary, objections accumulate (deduplicated on
+  path+statement, capped by recency), and only an explicit resolution closes
+  one — the Archivist emits `[resolved] <path> — <statement>` to do so.
+  Silence is never resolution: a run that omits an objection has ignored it.
+  When the ceiling abandons an objection it emits a `notice memory.capped`
+  naming it — a silent cap would be the same defect it exists to prevent;
+- **compaction**: after a run whose main thread holds more than
+  `GATEWAY_MEMORY_MAX_CHECKPOINTS` checkpoints (default 200), the thread is
+  rotated (`deleteThread`) and a `notice` is emitted — the dossier survives;
+- **eviction**: at the start of every run, dossiers untouched for more than
+  `GATEWAY_MEMORY_TTL_MS` (default 30 days) are purged with their threads, each
+  announced as a `notice`. `GATEWAY_MEMORY_MAX_CHARS` (default 4000) bounds the
+  injected section. A missing or unwritable volume emits `degraded` and the run
+  continues without memory — a lost memory never loses the run.
 
 ## Layout
 

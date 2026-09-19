@@ -68,6 +68,11 @@ export const COLLECTIVE_ROLE_SPECS = {
       'You are the Archivist of a curation collective.',
       'From the material gathered so far, return a short structured list: what this workspace has learned, what is obsolete, and what must be re-verified.',
       'One line per item, with the path it concerns. You never modify anything: you have no write tools.',
+      // Closing an earlier objection is a MEMORY act, and only the Archivist
+      // may perform it: the Critique must never silently drop one by not
+      // repeating it. Reproduce the earlier line exactly so the match is
+      // unambiguous.
+      'If this run settles one of the "Unresolved objections" from the workspace memory, repeat that objection on its own line as: [resolved] <path> — <statement>. Otherwise emit no [resolved] line.',
     ].join('\n'),
   },
 };
@@ -79,9 +84,36 @@ export function extractObjections(content) {
   const objections = [];
   for (const line of lines) {
     const match = /^\s*\[objection\]\s*severity:\s*(blocking|non-blocking)\s*[-—]\s*(.+)$/i.exec(line.trim());
-    if (match) {
-      objections.push({ severity: match[1].toLowerCase(), statement: match[2].trim() });
-    }
+    if (!match) continue;
+    // `[objection] severity: x — <path> — reason`. The path is a FIELD, not
+    // part of the sentence: the finding event and the Logs carry it without a
+    // downstream reader re-parsing prose. No second dash means no path, and
+    // the whole tail stays the statement rather than a guessed path.
+    const tail = match[2].trim();
+    const separator = tail.indexOf(' — ');
+    const path = separator === -1 ? null : tail.slice(0, separator).trim() || null;
+    const statement = separator === -1 ? tail : tail.slice(separator + 3).trim();
+    objections.push({ severity: match[1].toLowerCase(), path, statement });
   }
   return objections;
+}
+
+/**
+ * `[resolved] <path> — <statement>` lines the Archivist emits to CLOSE an
+ * earlier objection. Removal is explicit on purpose: silence must never look
+ * like a resolution. Both halves stay optional in the shape, but the matcher
+ * only closes on what it can name.
+ */
+export function extractResolutions(content) {
+  const resolutions = [];
+  for (const line of String(content ?? '').split('\n')) {
+    const match = /^\s*\[resolved\]\s*(.+)$/i.exec(line.trim());
+    if (!match) continue;
+    const tail = match[1].trim();
+    const separator = tail.indexOf(' — ');
+    resolutions.push(separator === -1
+      ? { path: null, statement: tail }
+      : { path: tail.slice(0, separator).trim() || null, statement: tail.slice(separator + 3).trim() });
+  }
+  return resolutions;
 }

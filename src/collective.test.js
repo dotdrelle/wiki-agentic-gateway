@@ -8,7 +8,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
 import { createAgentRunner } from './agent.js';
-import { extractObjections } from './collective.js';
+import { extractObjections, extractResolutions } from './collective.js';
 
 // Scripted model: responses are consumed in order, the last one repeats.
 // FakeListChatModel formats responses as TEXT (tool_calls are dropped), so a
@@ -109,6 +109,13 @@ test('the collective: each named role runs once and its lifecycle is announced',
   const objections = extractObjections(output.content);
   assert.equal(objections.length, 1);
   assert.equal(objections[0].severity, 'blocking');
+  // The path is a structured field, not prose: the finding event carries it
+  // so a downstream filter (Logs, a future proposal view) names the page.
+  const finding = events.find((event) => event.type === 'finding' && event.category === 'objection');
+  assert.ok(finding, 'the objection travels as a finding');
+  assert.equal(finding.path, 'wiki/concepts/demo/a.md');
+  assert.equal(finding.severity, 'blocking');
+  assert.equal(finding.summary, 'unsourced claim');
 });
 
 test('role frontiers: the Critique never sees the write tools, the Redactor does', async () => {
@@ -158,4 +165,15 @@ test('role frontiers: the Critique never sees the write tools, the Redactor does
   } finally {
     process.env.GATEWAY_WORKSPACES_ROOT = previous;
   }
+});
+
+test('the Archivist closes an objection by naming it, and only then', () => {
+  // The shape it must reproduce: path and statement.
+  assert.deepEqual(
+    extractResolutions('memory: re-verify\n[resolved] wiki/concepts/demo/a.md — unsourced claim'),
+    [{ path: 'wiki/concepts/demo/a.md', statement: 'unsourced claim' }],
+  );
+  // A statement-only resolution is allowed; prose without the marker is not.
+  assert.deepEqual(extractResolutions('[resolved] unsourced claim'), [{ path: null, statement: 'unsourced claim' }]);
+  assert.deepEqual(extractResolutions('I think the claim is probably fine now.'), []);
 });

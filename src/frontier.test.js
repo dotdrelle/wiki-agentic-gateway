@@ -7,6 +7,7 @@ import {
   GATEWAY_BUILTIN_TOOL_NAMES,
   buildGatewayAgent,
   createGatewayBoundaryMiddleware,
+  resolveMemoryScope,
 } from './agent.js';
 
 // The frontier contract: whatever deepagents attaches by default, the model
@@ -102,4 +103,35 @@ test('the boundary enforces the token budget before the next model call', async 
     boundary.wrapModelCall({ tools: [], messages: [longMessage] }, async (request) => request),
     /token budget exceeded/,
   );
+});
+
+// ── Memory scope (lot 1) ─────────────────────────────────────────────────────
+//
+// A thread key is a READ capability: it decides whose past conversation this
+// run resumes. These pin that the gateway owns the namespace and never takes
+// the caller's word for it.
+
+test('an absent memory scope is the normal mono-user case, not a degradation', () => {
+  const resolved = resolveMemoryScope({ supplied: null, workspace: { name: 'acme' } });
+  assert.equal(resolved.scope, 'acme');
+  assert.equal(resolved.degraded, null);
+  assert.equal(resolveMemoryScope({ supplied: '   ', workspace: 'acme' }).degraded, null);
+});
+
+test('a scope may only refine the run workspace, never leave it', () => {
+  const refined = resolveMemoryScope({ supplied: 'acme:alice', workspace: { name: 'acme' } });
+  assert.equal(refined.scope, 'acme:alice');
+  assert.equal(refined.degraded, null);
+
+  for (const hostile of ['other', 'other:alice', 'acme-evil', '../acme', 'acme:../../etc']) {
+    const refused = resolveMemoryScope({ supplied: hostile, workspace: { name: 'acme' } });
+    assert.equal(refused.scope, 'acme', `"${hostile}" must fall back to the workspace`);
+    assert.ok(refused.degraded, `"${hostile}" must announce the refusal`);
+  }
+});
+
+test('an oversized scope is refused rather than used as a thread key', () => {
+  const refused = resolveMemoryScope({ supplied: `acme:${'a'.repeat(400)}`, workspace: 'acme' });
+  assert.equal(refused.scope, 'acme');
+  assert.match(refused.degraded.cause, /maximum length/);
 });

@@ -37,6 +37,18 @@ export function startGateway({
     return run;
   }
 
+  /*
+   A heartbeat says "alive NOW". Replayed in bulk to a client that reconnects,
+   it is at best useless and at worst a false history — twenty beats arriving
+   at once describe a run that is not beating. So it is streamed to the
+   subscribers present and never stored: only facts with historical value
+   (`phase_*`, `finding`, `degraded`, tool and role events) are replayable.
+
+   It still takes a sequence number, so a client counting frames does not see a
+   gap where a beat went by.
+  */
+  const EPHEMERAL_EVENT_TYPES = new Set(['heartbeat']);
+
   function emit(run, event) {
     const stamped = {
       ...event,
@@ -44,8 +56,34 @@ export function startGateway({
       ts: now().toISOString(),
       sequence: run.sequence++,
     };
-    run.events.push(stamped);
+    if (!EPHEMERAL_EVENT_TYPES.has(String(event?.type))) run.events.push(stamped);
     for (const write of run.streams) write(stamped);
+  }
+
+  /*
+   The proof a long run is still working when no tool is firing.
+
+   Started with the run and cleared on EVERY exit — success, failure,
+   cancellation, and the approval pause, where the run is deliberately idle and
+   a beat would claim work that is not happening.
+  */
+  const HEARTBEAT_MS = Number(process.env.GATEWAY_HEARTBEAT_MS || 15_000);
+
+  function startHeartbeat(run) {
+    stopHeartbeat(run);
+    if (!(HEARTBEAT_MS > 0)) return;
+    const startedAt = Date.now();
+    run.heartbeat = setInterval(() => {
+      if (run.status !== 'running') return stopHeartbeat(run);
+      emit(run, { type: 'heartbeat', elapsedMs: Date.now() - startedAt });
+    }, HEARTBEAT_MS);
+    run.heartbeat.unref?.();
+  }
+
+  function stopHeartbeat(run) {
+    if (!run?.heartbeat) return;
+    clearInterval(run.heartbeat);
+    run.heartbeat = null;
   }
 
   function capabilityFor(name) {
@@ -71,6 +109,9 @@ export function startGateway({
       // The collective (named subagents) is declared per capability too.
       roles: Array.isArray(capability?.subagents) ? capability.subagents.map(String) : [],
       runId: run.runId,
+      // Carried, never trusted: the runner validates it against the workspace
+      // it resolved (resolveMemoryScope). Absent is the normal mono-user case.
+      memoryScope: request.memoryScope ?? null,
     });
   });
 
@@ -99,6 +140,9 @@ export function startGateway({
         if (run.status === 'cancelled') return;
         run.status = 'running';
       }
+      // After the approval gate on purpose: a run parked on a human decision
+      // is idle, and a beat there would claim work nobody is doing.
+      startHeartbeat(run);
       const runModel = request.model ?? null;
       if (!runModel?.baseUrl || !(runModel.model || runModel.name)) {
         run.status = 'failed';
@@ -131,6 +175,12 @@ export function startGateway({
         // the diff the human merges or rejects. The manager persists it into
         // the workspace review queue; nothing here touched the wiki.
         ...(output?.worktreeProposal ? { worktreeProposal: output.worktreeProposal } : {}),
+        // What the run lost on the way (a role that failed but did not stop
+        // it). Carried on the RESULT so the proposal a human opens tomorrow
+        // still says a role was missing when it was written.
+        ...(Array.isArray(output?.degradations) && output.degradations.length > 0
+          ? { degradations: output.degradations }
+          : {}),
         ...(Array.isArray(output?.refusedParams) && output.refusedParams.length > 0
           ? { refusedParams: output.refusedParams }
           : {}),
@@ -150,6 +200,11 @@ export function startGateway({
       // The operator watches this console: say WHY, like the manager does.
       console.error(`run ${run.runId} failed: ${run.error}`);
       emit(run, { type: 'run_failed', error: run.error });
+    } finally {
+      // Every exit, without exception: the beat must not outlive the work it
+      // claims. A timer left armed is both a false liveness signal and a
+      // handle holding the run object alive.
+      stopHeartbeat(run);
     }
   }
 
@@ -240,6 +295,7 @@ export function startGateway({
         run.aborted = true;
         run.controller.abort();
         run.status = 'cancelled';
+        stopHeartbeat(run);
         run.rejectApproval?.(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
         return sendJson(response, 200, { ok: true });
       }
