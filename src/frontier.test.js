@@ -3,6 +3,7 @@ import test from 'node:test';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
+import { COLLECTIVE_ROLE_NAMES } from './collective.js';
 import {
   GATEWAY_BUILTIN_TOOL_NAMES,
   GATEWAY_INTERNAL_TOOL_NAMES,
@@ -165,6 +166,11 @@ test('the per-role frontier is declared and never widens a read role', () => {
 test('the declared policy is the only source of a role tool class', () => {
   assert.deepEqual(ROLE_TOOL_POLICY.scout, ['read']);
   assert.deepEqual(ROLE_TOOL_POLICY.redactor, ['read', 'worktree']);
+  // Every role the collective can run is DECLARED, not inferred by a fallback:
+  // a role added to COLLECTIVE_ROLE_NAMES without a policy line fails here.
+  for (const role of COLLECTIVE_ROLE_NAMES) {
+    assert.ok(ROLE_TOOL_POLICY[role], `role "${role}" has no declared tool policy`);
+  }
   // An unknown role fails closed to reads.
   assert.deepEqual(
     roleAllowList({ role: 'nobody', mcpToolNames: ['wiki__wiki_read_page'], worktreeToolNames: ['write_file'] }),

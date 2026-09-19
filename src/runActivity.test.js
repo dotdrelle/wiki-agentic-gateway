@@ -588,3 +588,50 @@ test('the first role failure under parallelism falls back to sequential and says
     else process.env.GATEWAY_COLLECTIVE_CONCURRENCY = previous;
   }
 });
+
+test('a required role failure aborts the siblings still in flight', async () => {
+  const previous = process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
+  process.env.GATEWAY_COLLECTIVE_CONCURRENCY = '2';
+  try {
+    // scout fails at once; redteam would take 300 ms. A run that awaited the
+    // sibling would take ~300 ms; the abort path must not.
+    class SlowSiblingModel extends BaseChatModel {
+      _llmType() { return 'slow'; }
+      _combineLLMOutput() { return []; }
+      bindTools() { return this; }
+      async _generate(messages) {
+        const text = messages.map((message) => String(message?.content ?? '')).join('\n');
+        if (text.includes('Your task as the scout')) throw new Error('scout exploded');
+        if (text.includes('Your task as the redteam')) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        return { generations: [{ message: new AIMessage('done'), text: '' }], llmOutput: {} };
+      }
+    }
+
+    const runner = createAgentRunner({
+      model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+      mcpServers: [],
+      toolsOverride: [readTool()],
+      roles: ['scout', 'redteam'],
+      checkpointer: false,
+      runId: 'abort-siblings',
+      chatModelOverride: new SlowSiblingModel({}),
+    });
+
+    const startedAt = Date.now();
+    await assert.rejects(
+      () => runner.run({ objective: 'audit', capability: 'agent.review', workspace: 'acme' }),
+      /scout exploded/,
+    );
+    assert.ok(
+      Date.now() - startedAt < 150,
+      'the run must reject without awaiting the in-flight sibling',
+    );
+  } finally {
+    if (previous === undefined) delete process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
+    else process.env.GATEWAY_COLLECTIVE_CONCURRENCY = previous;
+    // Let the abandoned sibling's timer drain before the test file ends.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+});

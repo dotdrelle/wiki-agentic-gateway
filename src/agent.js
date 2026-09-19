@@ -418,6 +418,7 @@ function roleIsRequired(role, { worktree = false } = {}) {
 */
 export const ROLE_TOOL_POLICY = {
   scout: ['read'],
+  redteam: ['read'],
   analyst: ['read'],
   critique: ['read'],
   archivist: ['read'],
@@ -712,6 +713,14 @@ export function createAgentRunner({
       // `let`: the first parallelism incident lowers it to 1, so the rest of
       // the collective runs sequentially and the degradation is announced.
       let concurrency = collectiveConcurrency();
+      // An INTERNAL abort, composed with the run's signal. When a required role
+      // fails (or the run is cancelled), the sibling roles still in flight are
+      // cancelled too: without it they keep spending tokens and emitting
+      // findings that reach a closed stream, or pollute a run already failed.
+      const collectiveAbort = new AbortController();
+      const roleSignal = signal
+        ? AbortSignal.any([signal, collectiveAbort.signal])
+        : collectiveAbort.signal;
 
       const runRole = async (role) => {
         const spec = COLLECTIVE_ROLE_SPECS[role];
@@ -776,7 +785,7 @@ export function createAgentRunner({
             agent: roleAgent,
             input: `${baseInput}${handoffs}${procedureSection}\n\nYour task as the ${role}: ${spec.description}`,
             threadId: `${roleThreadBase}:${role}`,
-            signal,
+            signal: roleSignal,
             callbacks: roleCallbacks,
           });
         } catch (error) {
@@ -842,6 +851,22 @@ export function createAgentRunner({
         }).catch(() => {});
       };
 
+      // A role failure already REPORTS itself; this makes the reporting
+      // reusable for a failure raised anywhere in runRole's body.
+      const recordRoleFailure = (role, error, required) => {
+        if (error?.name === 'AbortError') return;
+        const cause = error instanceof Error ? error.message : String(error);
+        onEvent?.({
+          type: 'degraded',
+          capability: `role:${role}`,
+          cause,
+          fallback: required
+            ? 'the curation stops here; the roles already finished keep their findings'
+            : 'the run continues without this role, and the proposal says so',
+        });
+        degradations.push({ role, required, cause });
+      };
+
       while (settle.size < enabledRoles.length) {
         const ready = enabledRoles.filter((role) => !settle.has(role) && !running.has(role)
           && (COLLECTIVE_ROLE_GRAPH[role] ?? []).every((dep) => !enabledRoles.includes(dep) || settle.has(dep)));
@@ -850,7 +875,15 @@ export function createAgentRunner({
         if (ready.length === 0 && running.size === 0) break;
         for (const role of ready) {
           if (running.size >= concurrency) break;
-          running.set(role, runRole(role));
+          const required = roleIsRequired(role, { worktree: Boolean(worktreeState) });
+          // The WHOLE runRole is guarded: a failure in its SETUP (allow-list,
+          // catalogue, model resolution) must surface as a role failure the
+          // scheduler can handle, not a raw rejection that leaves the sibling
+          // promises unhandled.
+          running.set(role, runRole(role).catch((error) => {
+            recordRoleFailure(role, error, required);
+            return { role, failed: error, required };
+          }));
         }
         if (running.size === 0) continue;
         const settled = await Promise.race(running.values());
@@ -858,6 +891,7 @@ export function createAgentRunner({
         settle.add(settled.role);
         if (settled.failed) {
           if (settled.failed?.name === 'AbortError') {
+            collectiveAbort.abort();
             await cleanupWorktree();
             throw settled.failed;
           }
@@ -874,6 +908,9 @@ export function createAgentRunner({
             concurrency = 1;
           }
           if (settled.required) {
+            // Cancel the siblings still in flight: the run is ending, and their
+            // work would only burn tokens and emit into a closed stream.
+            collectiveAbort.abort();
             await cleanupWorktree();
             throw settled.failed;
           }

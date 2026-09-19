@@ -112,7 +112,12 @@ order cannot reorder the context. `GATEWAY_COLLECTIVE_CONCURRENCY` is **1
 parallel collective on phase metrics (p95 improves without losing an objection,
 `GET /metrics`). The first role failure while roles are in flight lowers it back
 to 1 and emits a `degraded` (`collective-concurrency`) — a silent fallback
-would hide the bug the parallel mode introduced.
+would hide the bug the parallel mode introduced. An internal AbortController,
+composed with the run's signal, cancels the roles still in flight when a
+required role fails or the run is cancelled: otherwise they keep spending
+tokens and emit findings that reach a closed stream. Every role's whole setup
+is guarded, so a construction failure is a role failure, not a raw rejection
+leaving siblings unhandled.
 
 The per-role frontier is DECLARED, not inferred from `role === 'redactor'`:
 `ROLE_TOOL_POLICY` gives each role its tool classes (`read`, plus `worktree` for
