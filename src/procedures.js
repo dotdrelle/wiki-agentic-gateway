@@ -160,9 +160,12 @@ export function procedureCatalogue(registry, { role = null, allowedToolNames = [
 }
 
 /**
- * The body, read on demand. Confined to the procedure's own directory by the
- * canonical check, so a symlinked `SKILL.md` cannot serve a file from outside
- * the registry, and bounded so a huge page cannot flood the context.
+ * The body, read on demand. Confined to the SCOPE directory by the canonical
+ * check — the root is the scope, never the procedure's own (possibly linked)
+ * directory, so a symlinked `SKILL.md` cannot serve a file from outside the
+ * registry — and bounded so a huge page cannot flood the context. A body is
+ * readable only through a role context: the same filter that built the
+ * catalogue is replayed here, so a role cannot read what it was not offered.
  */
 export async function readProcedureBody(registry, name, { role = null, allowedToolNames = null } = {}) {
   const procedure = registry.procedures.get(String(name));
