@@ -154,14 +154,20 @@ the measurement the lot 6 gate reads — "p95 improves without losing objections
 
 ## Progressive final (lot 7 — not enabled)
 
-The assembly is delivered as ONE atomic `message` event. A progressive stream was
-attempted and rejected on evidence: `mainAgent.stream({ streamMode: 'messages' })`
-on the installed Deep Agents graph yields ONE aggregated message per call, not
-token chunks (a probe model that emits three chunks produces a single frame), so
-the "stream" would be the whole answer in one delta. The manager already accepts
-`assistant_delta` / `assistant_delta_reset` and replaces the streamed text with
-the final message, so the consumer side is ready when a wiring that streams LLM
-tokens exists; do not ship a single-delta pseudo-stream before then.
+The assembly is delivered as ONE atomic `message` event. A progressive stream is
+TECHNICALLY AVAILABLE — the JS streaming hook is `_streamResponseChunks` (an
+earlier probe used `_stream`, the Python name, and measured a model that cannot
+stream at all), the graph takes that path when the model implements it
+(`_generate` is not even called), and `ChatOpenAI`, which `initChatModel`
+resolves `openai/…` to, implements it.
+
+It is not enabled for a SCOPE reason, not an impossibility: only the ASSEMBLY
+has a visible answer — a role's output is a handoff the user never sees — so
+streaming would accelerate one phase of the run, not the run. Before enabling
+it, prove it with a real integration test against the installed version
+(per-token frames, no duplicate answer, no role leak). The consumer side is
+ready: the manager accepts `assistant_delta` / `assistant_delta_reset` and
+replaces the streamed text with the final message.
 
 ## Procedures (lot 5b)
 
