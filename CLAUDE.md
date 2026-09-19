@@ -152,6 +152,17 @@ a BOUNDED sliding window of the last `GATEWAY_METRICS_WINDOW` durations (default
 the measurement the lot 6 gate reads — "p95 improves without losing objections"
 — and it carries no prompt, no source text, no model output.
 
+## Progressive final (lot 7 — not enabled)
+
+The assembly is delivered as ONE atomic `message` event. A progressive stream was
+attempted and rejected on evidence: `mainAgent.stream({ streamMode: 'messages' })`
+on the installed Deep Agents graph yields ONE aggregated message per call, not
+token chunks (a probe model that emits three chunks produces a single frame), so
+the "stream" would be the whole answer in one delta. The manager already accepts
+`assistant_delta` / `assistant_delta_reset` and replaces the streamed text with
+the final message, so the consumer side is ready when a wiring that streams LLM
+tokens exists; do not ship a single-delta pseudo-stream before then.
+
 ## Procedures (lot 5b)
 
 Reusable instructions a role can load — NOT "skills": the product already owns
