@@ -38,3 +38,16 @@ test('the snapshot carries durations and counts, never content', () => {
   const serialized = JSON.stringify(metrics.snapshot());
   assert.doesNotMatch(serialized, /secret page body|prompt|objective|content/i);
 });
+
+test('the per-phase duration sample is a bounded window, not an unbounded accumulator', () => {
+  const metrics = createPhaseMetrics();
+  for (let i = 1; i <= 600; i += 1) {
+    metrics.record({ type: 'phase_finished', phase: 'discover', durationMs: i });
+  }
+  const snapshot = metrics.snapshot();
+  assert.equal(snapshot.window, 500);
+  assert.equal(snapshot.phases.discover.count, 500, 'only the last N durations are kept');
+  // The window is the MOST RECENT samples: durations 101..600 (500 of them),
+  // so nearest-rank p95 is the 475th entry = 101 + 474 = 575.
+  assert.equal(snapshot.phases.discover.p95, 575);
+});

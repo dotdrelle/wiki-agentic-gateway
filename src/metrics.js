@@ -7,6 +7,11 @@
  no prompt, no model output — only "how long", "how many".
 */
 
+// A sliding window per phase: only the last N durations are kept, so the p95
+// stays just as faithful while the accumulator is the only one in the repo with
+// a ceiling (MAX_RUN_EVENTS, MEMORY_SCOPE_MAX, the 20/50 caps).
+const METRICS_WINDOW = Number.parseInt(process.env.GATEWAY_METRICS_WINDOW ?? '', 10) || 500;
+
 /** Nearest-rank percentile; null on an empty sample rather than a fake 0. */
 export function percentile(sorted, p) {
   if (!Array.isArray(sorted) || sorted.length === 0) return null;
@@ -42,6 +47,9 @@ export function createPhaseMetrics() {
       const phase = String(event?.phase ?? 'unknown');
       const entry = phases.get(phase) ?? { durations: [], tools: 0, pages: 0 };
       entry.durations.push(durationMs);
+      if (entry.durations.length > METRICS_WINDOW) {
+        entry.durations.splice(0, entry.durations.length - METRICS_WINDOW);
+      }
       entry.tools += Number(event?.tools) || 0;
       entry.pages += Number(event?.pages) || 0;
       phases.set(phase, entry);
@@ -65,7 +73,7 @@ export function createPhaseMetrics() {
         pages: entry.pages,
       };
     }
-    return { phases: result, ...counters };
+    return { phases: result, window: METRICS_WINDOW, ...counters };
   }
 
   return { record, snapshot };

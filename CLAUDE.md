@@ -128,9 +128,11 @@ re-evaluate — the role specs and the event vocabulary stay unchanged.
 
 `GET /metrics` returns local, content-free phase metrics: per-phase p50 / p95 /
 avg duration plus tool and page counts, and run / heartbeat / degraded counters.
-`phase_finished` carries `durationMs` (a fact, never content). This is the
-measurement the lot 6 gate reads — "p95 improves without losing objections" —
-and it carries no prompt, no source text, no model output.
+`phase_finished` carries `durationMs` (a fact, never content). Each phase keeps
+a BOUNDED sliding window of the last `GATEWAY_METRICS_WINDOW` durations (default
+500), so the accumulator has a ceiling like every other one in the repo. This is
+the measurement the lot 6 gate reads — "p95 improves without losing objections"
+— and it carries no prompt, no source text, no model output.
 
 ## Procedures (lot 5b)
 
