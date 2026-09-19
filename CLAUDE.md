@@ -73,8 +73,10 @@ confined hands, and the merge is the approval:
   the harness's **virtual** absolute paths rooted at the worktree (`/`,
   `/wiki/x.md`). The wrapper strips the leading `/`, resolves the remainder
   under the real root, refuses `..`/`~` and enforces lexical containment, then
-  re-expresses the virtual path for the inner call; writes additionally keep the
-  canonical (realpath) containment check. Feeding `/` straight to the host-path
+  re-expresses the virtual path for the inner call. READS and WRITES alike keep
+  the canonical (realpath) containment check (`confineForRead` /
+  `confineForWrite`): reads were lexical only, so `ls`/`grep`/`read_file`
+  followed a symlink out of the worktree. Feeding `/` straight to the host-path
   helper treated it as the host root and refused it (`path escapes the
   worktree: /`), which killed every curate run at its first `ls('/')`;
   `src/worktree.test.js` exercises the virtual root, read and write. Without the

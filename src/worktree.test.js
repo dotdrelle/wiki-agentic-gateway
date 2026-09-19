@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
 import {
   WorktreeUnavailableError,
+  confineForRead,
   confineForWrite,
   confinePath,
   createConfinedBackend,
@@ -165,4 +166,38 @@ test('worktreeProposalTooLarge refuses unreadable diffs explicitly', () => {
   const bounds = worktreeProposalTooLarge([{}, {}], 'small', { maxFiles: 40, maxDiffChars: 300000 });
   assert.equal(bounds.oversized, false);
   assert.equal(bounds.files, 2);
+});
+
+test('confineForRead rejects a symlinked parent and a symlinked file', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gateway-wt-readconf-'));
+  const outside = mkdtempSync(join(tmpdir(), 'gateway-wt-outside-'));
+  mkdirSync(join(root, 'wiki'));
+  writeFileSync(join(outside, 'secret.md'), 'TOP SECRET');
+  symlinkSync(outside, join(root, 'wiki', 'link'));
+  symlinkSync(join(outside, 'secret.md'), join(root, 'wiki', 'secret.md'));
+
+  await assert.rejects(confineForRead(root, 'wiki/link/secret.md'), /resolves outside the worktree/);
+  await assert.rejects(confineForRead(root, 'wiki/secret.md'), /resolves outside the worktree/);
+  // The lexical check still passes for an in-tree path.
+  const ok = await confineForRead(root, 'wiki/normal.md');
+  assert.equal(ok, join(root, 'wiki', 'normal.md'));
+});
+
+test('the confined backend refuses reads that follow a symlink out of the worktree', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gateway-wt-readback-'));
+  const outside = mkdtempSync(join(tmpdir(), 'gateway-wt-outside-'));
+  mkdirSync(join(root, 'wiki'));
+  writeFileSync(join(outside, 'secret.md'), 'TOP SECRET');
+  symlinkSync(outside, join(root, 'wiki', 'link'));
+  const backend = createConfinedBackend(
+    new FilesystemBackend({ rootDir: root, virtualMode: true }),
+    { root },
+  );
+
+  await assert.rejects(backend.ls('/wiki/link'), /resolves outside the worktree/);
+  await assert.rejects(backend.read('/wiki/link/secret.md'), /resolves outside the worktree/);
+  // A real in-tree read is untouched.
+  writeFileSync(join(root, 'wiki', 'a.md'), '# A\n');
+  const read = await backend.read('/wiki/a.md');
+  assert.match(String(typeof read === 'string' ? read : (read?.content ?? '')), /# A/);
 });

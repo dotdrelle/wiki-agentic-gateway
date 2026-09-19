@@ -180,6 +180,29 @@ export async function confineForWrite(root, input) {
   return resolved;
 }
 
+// Canonical (realpath) containment for READ operations. The lexical check
+// alone does not protect against a symlink inside the tree pointing outside it,
+// and a read is not harmless: `ls`, `grep` and `read_file` would follow the
+// link out of the worktree. Canonicalise the target when it exists (a file
+// symlink), else its deepest existing ancestor (a symlinked parent), and verify
+// it is really under the worktree's real root.
+export async function confineForRead(root, input) {
+  const resolved = confinePath(root, input);
+  const realRoot = await realpath(root);
+  let probe = existsSync(resolved) ? resolved : dirname(resolved);
+  while (!existsSync(probe)) {
+    const up = dirname(probe);
+    if (up === probe) break;
+    probe = up;
+  }
+  const realProbe = await realpath(probe);
+  const rel = relative(realRoot, realProbe);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(`path resolves outside the worktree: ${input}`);
+  }
+  return resolved;
+}
+
 /**
  * The filesystem backend the agent gets on a worktree run, wrapped in the
  * canonical-path check. FilesystemBackend's own virtualMode is lexical and
@@ -188,9 +211,11 @@ export async function confineForWrite(root, input) {
  *
  * The inner backend runs in virtualMode: it takes VIRTUAL paths ("/wiki/x.md")
  * rooted at the worktree. The wrapper validates the incoming path against the
- * real root (lexical + canonical for writes), then re-expresses it virtually
- * for the inner call — an absolute host path handed to a virtual backend would
- * be re-rooted and land in the wrong place.
+ * real root — lexical containment always, plus canonical (realpath) for READS
+ * and WRITES alike — then re-expresses it virtually for the inner call: an
+ * absolute host path handed to a virtual backend would be re-rooted and land in
+ * the wrong place. Reads were lexical only, so `ls`/`grep`/`read_file` followed
+ * a symlink out of the worktree; `confineForRead` closes that.
  */
 export function createConfinedBackend(inner, { root }) {
   /*
@@ -218,28 +243,43 @@ export function createConfinedBackend(inner, { root }) {
     await confineForWrite(root, relative(root, toHost(input)));
     return toVirtual(input);
   };
+  const virtualForRead = async (input) => {
+    // Reads were lexical only, so `ls`/`grep`/`read_file` followed a symlink out
+    // of the worktree. A read is bounded by the same real root as a write.
+    await confineForRead(root, relative(root, toHost(input)));
+    return toVirtual(input);
+  };
   return {
-    async ls(dirPath) { return inner.ls(toVirtual(dirPath)); },
-    async read(filePath, offset, limit) { return inner.read(toVirtual(filePath), offset, limit); },
-    async readRaw(filePath) { return inner.readRaw(toVirtual(filePath)); },
+    async ls(dirPath) { return inner.ls(await virtualForRead(dirPath)); },
+    async read(filePath, offset, limit) {
+      return inner.read(await virtualForRead(filePath), offset, limit);
+    },
+    async readRaw(filePath) { return inner.readRaw(await virtualForRead(filePath)); },
     async write(filePath, content) { return inner.write(await virtualForWrite(filePath), content); },
     async edit(filePath, oldString, newString, replaceAll) {
       return inner.edit(await virtualForWrite(filePath), oldString, newString, replaceAll);
     },
     async delete(filePath) { return inner.delete(await virtualForWrite(filePath)); },
     async grep(pattern, dirPath = '/', glob = null, maxCount = null) {
-      return inner.grep(pattern, toVirtual(dirPath), glob, maxCount);
+      return inner.grep(pattern, await virtualForRead(dirPath), glob, maxCount);
     },
     async ripgrepSearch(pattern, baseFull, includeGlob) {
-      return inner.ripgrepSearch(pattern, toVirtual(baseFull), includeGlob);
+      return inner.ripgrepSearch(pattern, await virtualForRead(baseFull), includeGlob);
     },
-    async glob(pattern, searchPath = '/') { return inner.glob(pattern, toVirtual(searchPath)); },
+    async glob(pattern, searchPath = '/') {
+      return inner.glob(pattern, await virtualForRead(searchPath));
+    },
     async uploadFiles(files) {
-      const confined = files.map((file) => ({ ...file, path: toVirtual(file.path) }));
+      // Uploads write: the same canonical check as write/edit.
+      const confined = await Promise.all(files.map(async (file) => ({
+        ...file,
+        path: await virtualForWrite(file.path),
+      })));
       return inner.uploadFiles(confined);
     },
     async downloadFiles(paths) {
-      return inner.downloadFiles(paths.map((path) => toVirtual(path)));
+      const confined = await Promise.all(paths.map((path) => virtualForRead(path)));
+      return inner.downloadFiles(confined);
     },
   };
 }
