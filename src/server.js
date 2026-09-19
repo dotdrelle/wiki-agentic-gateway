@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createAgentRunner } from './agent.js';
 import { pruneStaleWorktrees, workspaceRootFor } from './worktree.js';
 import { describeProcedures, loadProcedureRegistry } from './procedures.js';
+import { createPhaseMetrics } from './metrics.js';
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
@@ -25,6 +26,8 @@ export function startGateway({
   now = () => new Date(),
 } = {}) {
   const runs = new Map();
+  // Local, content-free phase metrics: the measurement the lot 6 gate reads.
+  const metrics = createPhaseMetrics();
   let sequence = 0;
   // One identity per process: a cursor is only meaningful inside the instance
   // that produced it. A reconnect carrying another epoch is a gateway restart,
@@ -125,7 +128,10 @@ export function startGateway({
       model,
       mcpServers: request.mcp ?? [],
       signal: run.controller.signal,
-      onEvent: (event) => emit(run, event),
+      onEvent: (event) => {
+        metrics.record(event);
+        emit(run, event);
+      },
       // The hands follow the served capability declaration, never the request:
       // `worktree: true` on the capability is what arms the confined backend.
       worktree: capability?.worktree === true,
@@ -253,6 +259,10 @@ export function startGateway({
     }
     if (request.method === 'GET' && path === '/capabilities') {
       return sendJson(response, 200, config?.capabilities ?? []);
+    }
+    // Durations and counters only — no prompt, no source text, no model output.
+    if (request.method === 'GET' && path === '/metrics') {
+      return sendJson(response, 200, metrics.snapshot());
     }
     // The procedure diagnostic: what exists, what a later scope shadowed, what
     // is malformed, and the tools each one declares. Read-only; execution still

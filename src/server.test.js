@@ -248,3 +248,18 @@ test('the procedure diagnostic lists the registry without executing anything', a
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('the metrics route exposes durations and counters, no content', async () => {
+  const server = startGateway({
+    port: 0,
+    config: { version: 'test', capabilities: [{ name: 'agent.review', operations: ['run'] }], authToken: null },
+  });
+  const port = server.address().port;
+  try {
+    const report = await fetch(`http://127.0.0.1:${port}/metrics`).then((response) => response.json());
+    assert.equal(typeof report.runsStarted, 'number');
+    assert.equal(typeof report.phases, 'object');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

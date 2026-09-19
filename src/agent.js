@@ -452,6 +452,7 @@ export function createPhaseTracker(onEvent) {
   let tools = 0;
   let pages = 0;
   let lastProgressAt = 0;
+  let startedAt = 0;
 
   const progress = () => {
     if (!current) return;
@@ -476,11 +477,18 @@ export function createPhaseTracker(onEvent) {
       // A new phase reports its first tool at once, whatever the last phase's
       // window was.
       lastProgressAt = 0;
+      startedAt = Date.now();
       onEvent?.({ type: 'phase_started', phase });
     },
     finish(phase, { ok = true } = {}) {
-      onEvent?.({ type: 'phase_finished', phase, ok, tools, pages });
-      if (current === phase) current = null;
+      // The duration is a FACT (how long), never content: it is what the p95
+      // gate of lot 6 reads.
+      const durationMs = startedAt > 0 ? Date.now() - startedAt : 0;
+      onEvent?.({ type: 'phase_finished', phase, ok, tools, pages, durationMs });
+      if (current === phase) {
+        current = null;
+        startedAt = 0;
+      }
     },
     countTool(name) {
       tools += 1;

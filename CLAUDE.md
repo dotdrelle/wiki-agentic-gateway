@@ -124,6 +124,14 @@ that dependency, and the frontier test stays authoritative either way. If a
 future deepagents version fixes the subagent path, this is the seam to
 re-evaluate — the role specs and the event vocabulary stay unchanged.
 
+## Metrics
+
+`GET /metrics` returns local, content-free phase metrics: per-phase p50 / p95 /
+avg duration plus tool and page counts, and run / heartbeat / degraded counters.
+`phase_finished` carries `durationMs` (a fact, never content). This is the
+measurement the lot 6 gate reads — "p95 improves without losing objections" —
+and it carries no prompt, no source text, no model output.
+
 ## Procedures (lot 5b)
 
 Reusable instructions a role can load — NOT "skills": the product already owns
