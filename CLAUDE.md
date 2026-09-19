@@ -154,20 +154,24 @@ the measurement the lot 6 gate reads — "p95 improves without losing objections
 
 ## Progressive final (lot 7 — not enabled)
 
-The assembly is delivered as ONE atomic `message` event. A progressive stream is
-TECHNICALLY AVAILABLE — the JS streaming hook is `_streamResponseChunks` (an
-earlier probe used `_stream`, the Python name, and measured a model that cannot
-stream at all), the graph takes that path when the model implements it
-(`_generate` is not even called), and `ChatOpenAI`, which `initChatModel`
-resolves `openai/…` to, implements it.
+The assembly is delivered as ONE atomic `message` event. Progressively streaming
+it is deferred, and the documentation must not claim more than what is known:
 
-It is not enabled for a SCOPE reason, not an impossibility: only the ASSEMBLY
-has a visible answer — a role's output is a handoff the user never sees — so
-streaming would accelerate one phase of the run, not the run. Before enabling
-it, prove it with a real integration test against the installed version
-(per-token frames, no duplicate answer, no role leak). The consumer side is
-ready: the manager accepts `assistant_delta` / `assistant_delta_reset` and
-replaces the streamed text with the final message.
+- the JS streaming hook is `_streamResponseChunks` (an earlier probe used
+  `_stream`, the Python name, and measured a model that cannot stream — invalid).
+  The graph DOES call it when the model implements it (`_generate` not called),
+  and `ChatOpenAI`, which `initChatModel` resolves `openai/…` to, implements it;
+- but whether the graph SURFACES per-token frames is decided by the node's own
+  invoke/stream branch (the `AgentNode` calls `invoke()` outside a stream context
+  and `stream()` inside). Probes of `stream({streamMode:'messages'})`,
+  `streamEvents` and `streamMode:'custom'` all aggregated to ONE frame here, so
+  feasibility is NOT established: read that branch before implementing, and
+  prove per-token frames with a real integration test;
+- regardless, the reason to defer is SCOPE: only the ASSEMBLY has a visible
+  answer (a role's output is a handoff the user never sees), so a stream would
+  accelerate one phase of the run, not the run. The consumer side is ready: the
+  manager accepts `assistant_delta` / `assistant_delta_reset` and replaces the
+  streamed text with the final message.
 
 ## Procedures (lot 5b)
 
