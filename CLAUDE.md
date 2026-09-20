@@ -251,7 +251,10 @@ The memory is BOUNDED, in three pieces that ship together:
 - **eviction**: at the start of every run, dossiers untouched for more than
   `GATEWAY_MEMORY_TTL_MS` (default 30 days) are purged with their threads, each
   announced as a `notice`. `GATEWAY_MEMORY_MAX_CHARS` (default 4000) bounds the
-  injected section. A missing or unwritable volume emits `degraded` and the run
+  injected section. Unresolved objections precede the summary, blocking ones
+  first, so a full summary cannot hide them. Truncation emits a
+  `notice memory.context-capped`; the full dossier stays in SQLite.
+  A missing or unwritable volume emits `degraded` and the run
   continues without memory — a lost memory never loses the run.
 
 ## Transport
@@ -270,10 +273,16 @@ once its run is terminal, so a subscriber never hangs on a dead tail.
 
 ```text
 bin/wiki-agentic-gateway.js   CLI entry (port 7789 by default)
-src/server.js                 HTTP contract (7 routes), in-memory runs, SSE
-src/agent.js                  Deep Agents integration (single point): harness boundary, limits, buildGatewayAgent
-src/frontier.test.js          Contract test: the model sees exactly the declared MCP pool
+src/server.js                 HTTP contract (9 routes), bounded runs, SSE, heartbeat
+src/agent.js                  Deep Agents integration (single point): harness boundary, memory scope, role graph, limits
+src/collective.js             The six role specs (data only; assembly lives in agent.js)
+src/dossier.js                Per-workspace factual dossier, same memory.sqlite
+src/metrics.js                Content-free phase metrics (bounded sliding window)
+src/procedures.js             Scoped procedure registry, sanitized catalogue, confined body read
+src/procedureImporter.js      Claude/Codex SKILL.md subset importer (imported/adapted/refused)
+src/worktree.js               Confined worktree backend (canonical read AND write confinement)
 src/config.js                 capabilities from the manager's agent-runtimes.json (own entry), token from env
+src/frontier.test.js          Contract test: the model sees exactly the declared MCP pool
 ```
 
 ## Version

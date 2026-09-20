@@ -1,5 +1,5 @@
 /**
- * The named collective (lot 2): five roles with isolated context, replacing
+ * The named collective (lot 2): six roles with isolated context, replacing
  * the generic unbounded subagent the harness ships by default. Each role is
  * pure DATA here — the assembly (tools, boundary per role, worktree hands)
  * happens in agent.js, so this file stays reviewable at a glance.

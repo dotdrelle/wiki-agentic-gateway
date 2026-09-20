@@ -17,7 +17,9 @@ const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
  *   GET  /runs/:id          -> { runId, status, result? }
  *   POST /runs/:id/cancel   -> { ok }
  *   POST /runs/:id/approve  -> { ok }                     (HITL decision)
- *   GET  /runs/:id/events   -> SSE `data: {json}\n\n`, replay then live
+ *   GET  /runs/:id/events   -> SSE `data: {json}\n\n`, cursor replay then live
+ *   GET  /metrics           -> content-free phase metrics
+ *   GET  /procedures        -> read-only procedure diagnostic
  */
 export function startGateway({
   port = 7789,
