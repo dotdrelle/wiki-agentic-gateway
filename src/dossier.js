@@ -175,19 +175,23 @@ ON CONFLICT(scope) DO UPDATE SET
 
 // The section injected at the top of the next run. Bounded on purpose: what was
 // concluded and what is still open, never the raw transcripts.
-export function renderDossierSection(dossier, { maxChars = DOSSIER_LIMITS.summaryChars } = {}) {
+export function renderDossierSection(dossier, { maxChars = DOSSIER_LIMITS.summaryChars, onTruncated = null } = {}) {
   if (!dossier) return '';
   const lines = [];
-  if (dossier.summary) lines.push(dossier.summary);
-  const objections = Array.isArray(dossier.objections) ? dossier.objections : [];
+
+  const objections = (Array.isArray(dossier.objections) ? [...dossier.objections] : [])
+    .sort((a, b) => Number(b.severity === 'blocking') - Number(a.severity === 'blocking'));
   if (objections.length > 0) {
     lines.push('Unresolved objections from earlier runs (settle one explicitly to close it):');
     for (const objection of objections) {
       lines.push(`- [${objection.severity}]${objection.path ? ` ${objection.path}` : ''} — ${objection.statement}`);
     }
   }
+  // Open objections, especially blocking ones, take precedence over prose.
+  if (dossier.summary) lines.push(dossier.summary);
   const body = lines.join('\n').trim();
   if (!body) return '';
+  if (body.length > maxChars) onTruncated?.({ omittedChars: body.length - maxChars });
   const bounded = body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
   return [
     '## Workspace memory',

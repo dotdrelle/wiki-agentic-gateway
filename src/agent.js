@@ -648,7 +648,13 @@ export function createAgentRunner({
           }
           dossierSection = renderDossierSection(
             dossierStore.read(memory.workspaceKey),
-            { maxChars: memoryLimitsForRun.maxChars },
+            {
+              maxChars: memoryLimitsForRun.maxChars,
+              onTruncated: ({ omittedChars }) => onEvent?.({
+                type: 'notice', topic: 'memory.context-capped',
+                detail: `${omittedChars} characters omitted from injected memory; blocking objections take precedence, full dossier retained`,
+              }),
+            },
           );
         }
       } catch (error) {

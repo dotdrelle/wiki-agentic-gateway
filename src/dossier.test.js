@@ -135,3 +135,16 @@ test('the cap drops the stalest, never the freshest', () => {
   assert.equal(dropped.length, 1);
   assert.ok(dropped[0].path.startsWith('old/'), 'the abandoned objection is reported');
 });
+
+
+test('a full summary cannot hide unresolved blocking objections from the next run', () => {
+  let truncation;
+  const section = renderDossierSection({ summary: 'x'.repeat(4000), objections: [
+    { severity: 'non-blocking', path: 'other.md', statement: 'Check later' },
+    { severity: 'blocking', path: 'critical.md', statement: 'Missing evidence' },
+  ] }, { onTruncated: (report) => { truncation = report; } });
+  assert.ok(truncation.omittedChars > 0);
+  assert.match(section, /critical.md — Missing evidence/);
+  assert.ok(section.indexOf('critical.md') < section.indexOf('other.md'));
+  assert.ok(section.length < 4200);
+});
