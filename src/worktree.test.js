@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, existsSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
@@ -59,6 +59,35 @@ test('createWorktree makes a branch, records edits, and diffs against HEAD', asy
     assert.ok(!branches.includes(`agent/${runId}`));
   } finally {
     execFileSync('git', ['worktree', 'prune'], { cwd: root }).toString('utf8');
+  }
+});
+
+test('every worktree git call declares the workspace safe for foreign mounts', async () => {
+  // The workspace is a bind mount whose reported owner can differ from this
+  // container's process (Docker Desktop / WSL2), and git then refuses every
+  // command with "detected dubious ownership" — which is exactly how a curate
+  // run died at `git worktree add`. Every invocation must carry
+  // `-c safe.directory=<repo>`, as the engine's HistoryService already does.
+  const root = mkdtempSync(join(tmpdir(), 'gateway-wt-safe-'));
+  mkdirSync(join(root, '.git'));
+  const bin = mkdtempSync(join(tmpdir(), 'gateway-wt-bin-'));
+  const logFile = join(bin, 'calls.log');
+  const fakeGit = join(bin, 'git');
+  writeFileSync(fakeGit, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(logFile)}\nexit 0\n`);
+  chmodSync(fakeGit, 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}:${previousPath}`;
+  try {
+    const worktree = await createWorktree({ workspaceRoot: root, runId: 'safe-run' });
+    await removeWorktree({ workspaceRoot: root, worktreePath: worktree.path, branch: worktree.branch });
+  } finally {
+    process.env.PATH = previousPath;
+  }
+  const calls = readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean);
+  assert.ok(calls.length >= 3, 'create + remove issue every git call');
+  const safeFlag = `-c safe.directory=${root}`;
+  for (const call of calls) {
+    assert.ok(call.includes(safeFlag), `missing safe.directory in: ${call}`);
   }
 });
 

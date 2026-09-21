@@ -23,7 +23,17 @@ export function workspaceRootFor(workspace) {
 }
 
 async function git(args, cwd) {
-  return execFileAsync('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 });
+  // The workspace is a bind mount that can carry a different owner than this
+  // container's process (Docker Desktop / WSL2 present host-owned entries with
+  // an inconsistent uid), and git refuses any of its commands with "detected
+  // dubious ownership" the moment they disagree. The engine's own
+  // HistoryService already declares the workspace safe on every call; the
+  // gateway must too, or one `git worktree add` failure loses the whole
+  // curation. `cwd` is always the repository root being operated on.
+  return execFileAsync('git', ['-c', `safe.directory=${cwd}`, ...args], {
+    cwd,
+    maxBuffer: 16 * 1024 * 1024,
+  });
 }
 
 function branchNameFor(runId) {
