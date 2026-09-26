@@ -401,6 +401,35 @@ export function dependencyRoles(role, enabledRoles) {
  output IS the deliverable.
 */
 const REQUIRED_ROLES = new Set(['scout', 'analyst']);
+
+export function isRecursionLimit(error) {
+  return error?.name === 'GraphRecursionError' || /Recursion limit of \d+ reached/.test(String(error?.message ?? ''));
+}
+
+// What a role had gathered when it ran out of steps: its last words, then its
+// tool results, newest first (the handoff section bounds the whole). Null when
+// the thread holds nothing usable.
+export async function partialRoleHandoff(roleAgent, threadId) {
+  if (typeof roleAgent?.getState !== 'function') return null;
+  const state = await roleAgent.getState({ configurable: { thread_id: threadId } });
+  const messages = state?.values?.messages ?? [];
+  const typeOf = (message) => (typeof message?._getType === 'function' ? message._getType() : message?.type ?? message?.role);
+  const text = (message) => (typeof message?.content === 'string'
+    ? message.content
+    : (Array.isArray(message?.content) ? message.content.map((part) => part?.text ?? '').join('') : ''));
+  const tools = messages.filter((message) => typeOf(message) === 'tool' && text(message).trim());
+  const lastWords = [...messages].reverse().find((message) => typeOf(message) === 'ai' && text(message).trim());
+  if (tools.length === 0 && !lastWords) return null;
+  const blocks = [...tools].reverse().map((message) => `### ${message.name ?? 'tool'}\n${text(message).slice(0, 1500)}`);
+  return {
+    toolResults: tools.length,
+    text: [
+      `[partial — this role hit its step limit after ${tools.length} tool result(s); what it had gathered follows, newest first]`,
+      lastWords ? text(lastWords) : '',
+      ...blocks,
+    ].filter(Boolean).join('\n\n'),
+  };
+}
 function roleIsRequired(role, { worktree = false } = {}) {
   if (role === 'redactor') return worktree;
   return REQUIRED_ROLES.has(role);
@@ -786,16 +815,37 @@ export function createAgentRunner({
           .join('');
         let output = null;
         let failed = null;
+        const roleThreadId = `${roleThreadBase}:${role}`;
         try {
           output = await invokeOnce({
             agent: roleAgent,
             input: `${baseInput}${handoffs}${procedureSection}\n\nYour task as the ${role}: ${spec.description}`,
-            threadId: `${roleThreadBase}:${role}`,
+            threadId: roleThreadId,
             signal: roleSignal,
             callbacks: roleCallbacks,
           });
         } catch (error) {
-          failed = error;
+          // A role that ran out of graph steps has still READ something: its
+          // thread holds every tool result until the finally below deletes it.
+          // Observed on acpi: the Scout read pages one by one, hit the limit
+          // after 47 s, and — being required — took the whole curation down
+          // with everything it had found. Rescue it as a partial handoff,
+          // announced; only a role that gathered nothing still fails.
+          const partial = isRecursionLimit(error)
+            ? await partialRoleHandoff(roleAgent, roleThreadId).catch(() => null)
+            : null;
+          if (partial) {
+            output = partial.text;
+            onEvent?.({
+              type: 'degraded',
+              capability: `role:${role}`,
+              cause: `step limit reached (${GATEWAY_RECURSION_LIMIT}) after ${partial.toolResults} tool result(s)`,
+              fallback: 'the run continues with what this role had gathered, marked partial',
+            });
+            degradations.push({ role, required: false, cause: 'step limit — partial handoff' });
+          } else {
+            failed = error;
+          }
         } finally {
           phaseTracker.finish(phase, { ok: failed === null });
           onEvent?.({ type: 'subagent_finished', subagent: role });
@@ -1093,6 +1143,19 @@ export function createAgentRunner({
           throw new Error(
             `the curation diff is too large to review (${bounds.files} files, ${bounds.diffChars} chars — ceilings ${bounds.maxFiles} files / ${bounds.maxDiffChars} chars). The branch was discarded: re-run with a narrower objective.`,
           );
+        }
+        // A curation that wrote nothing is not a proposal: say so where the
+        // Logs read. Observed on acpi: the Redactor described its corrections
+        // in prose, on a branch name it invented, and the run read as a
+        // success. The branch itself is left as the other paths leave it.
+        if (changes.length === 0 && enabledRoles.includes('redactor')) {
+          onEvent?.({
+            type: 'degraded',
+            capability: 'role:redactor',
+            cause: 'the Redactor wrote no file on the review branch',
+            fallback: 'no proposal to review; the findings stay in the report only',
+          });
+          degradations.push({ role: 'redactor', required: false, cause: 'no file written' });
         }
         const workspaceRoot = workspaceRootFor(runWorkspace);
         worktreeProposal = {
