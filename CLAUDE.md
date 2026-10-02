@@ -13,7 +13,9 @@ another and nothing changes on its side.
 
 ## Boundary (do not violate)
 
-Eyes, ideas and a mouth — no hands:
+Eyes, ideas and a mouth — no hands on the live workspace, with one documented
+exception: a capability declared `worktree: true` gets confined hands on a
+review branch whose diff a human merges or discards:
 
 - the MCP pool is **read-only plus approval-gated tools** (mail). Never expose
   workspace write paths or orchestration tools (`agent_execute`,
@@ -50,8 +52,14 @@ workspace is reachable through them — but without the boundary the model is
 - `buildGatewayAgent` is the single assembly used by both the runner and the
   contract test, with the backend declared explicitly;
 - ceilings that did not exist: `GATEWAY_RECURSION_LIMIT` (default 40) and
-  `GATEWAY_TOKEN_BUDGET` (default 500 000, estimated before each model call
-  with the harness's own counter). The 600s task timeout stays.
+  `GATEWAY_TOKEN_BUDGET` (default 500 000). The budget is a **cumulative
+  per-agent estimate** — each role run and the assembly gets its own
+  accumulator, checked with the harness's counter before every model call, so
+  it is not a shared run-wide cap and a whole-corpus curation may need it
+  raised. Crossing it stops that agent before its next call and is announced
+  (`degraded role:<role>`, or a run failure for a required role/assembly).
+  A role that trips the recursion limit hands over a partial result and only
+  fails when it gathered nothing. The 600s task timeout stays.
 
 `src/frontier.test.js` is the contract: it builds the production wiring with a fake
 model and asserts the visible tool set is exactly the declared MCP pool.
@@ -66,6 +74,10 @@ A capability declared `"worktree": true` (today: `agent.curate`) arms real but
 confined hands, and the merge is the approval:
 
 - one git worktree per objective: `git worktree add -b agent/<runId>` under
+  the workspace's `.wiki/agent-worktrees/<runId>`. `runId` is
+  `gateway-<base36 timestamp>-<n>` (`nextRunId`, `src/server.js`), unique
+  across restarts — the old `gateway-<n>` restarted at 1 and collided with a
+  crashed run's leftover worktree;
   the workspace's `.wiki/agent-worktrees/<runId>` (gitignored state, same
   mount every container shares; the image carries git for this);
 - the backend is `FilesystemBackend({ virtualMode: true })` wrapped by
@@ -88,7 +100,11 @@ confined hands, and the merge is the approval:
   `changes`, unified `diff`, workspace-relative worktree path, branch). The
   manager persists it into `.wiki/agent-proposals/`, the served review page
   (`/agent-proposals`) merges or rejects — the gateway NEVER writes the
-  workspace, and a failed run removes its own worktree;
+  workspace, and a failed run removes its own worktree. `createWorktree`
+  recovers an abandoned EMPTY worktree at the same path (removes and recreates
+  it) and refuses one WITH changes — it may be an unreviewed proposal, never
+  discard it silently; the `GATEWAY_WORKTREE_MAX_AGE_MS` prune covers the
+  rest;
 - the capability declares no `mutationClass`/`defaultRequiresApproval`: no
   pre-run approval pause — the human merge IS the approval.
 
@@ -96,11 +112,18 @@ confined hands, and the merge is the approval:
 
 Six named roles (`src/collective.js`): **Scout** (finds material), **Red Team**
 (lot 6 — red-teams the RAW material: thin evidence, single-source claims,
-contradictions), **Analyst** (structures it), **Critique** (structured
+contradictions), **Analyst** (structures it by tag/family and names the
+`wiki/sources` fiches to correct; an issue on a generated `wiki/concepts` pivot
+— missing `sources:`, missing status, duplicated pivots — is rebuild-owned, a
+TAXO rebuild and not a curation), **Critique** (structured
 objections — one `[objection] severity: blocking|non-blocking — <path> — reason`
 line per problem, NEVER blocks), **Redactor** (writes the corrections, worktree
-runs only), **Archivist** (learned / obsolete / to re-verify). A capability's
-`subagents` list selects which roles run.
+runs only: a `write_file`/`edit_file` is its FIRST action, never an `ls`/`grep`
+re-audit — the handoff is the audit — and it edits `wiki/sources` fiches only,
+leaving generated pivots alone unless the human promotes one; when every
+finding is rebuild-owned it writes nothing and says so), **Archivist** (learned
+/ obsolete / to re-verify). A capability's `subagents` list selects which roles
+run.
 
 The roles are scheduled by a declared GRAPH, not a list
 (`COLLECTIVE_ROLE_GRAPH`): `scout` and `redteam` depend on nothing and may run
