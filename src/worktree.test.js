@@ -62,6 +62,31 @@ test('createWorktree makes a branch, records edits, and diffs against HEAD', asy
   }
 });
 
+test('createWorktree recovers an abandoned empty worktree but never one with changes', async () => {
+  const root = gitRepo({ 'wiki/concepts/demo/a.md': '# A\n' });
+  const runId = 'gateway-orphan';
+  try {
+    const first = await createWorktree({ workspaceRoot: root, runId });
+    // A crashed run left an EMPTY worktree behind (nothing was written): the
+    // next process reused the id and every first curation died on it. The
+    // empty orphan is recovered, not fatal.
+    const recovered = await createWorktree({ workspaceRoot: root, runId });
+    assert.equal(recovered.path, first.path);
+    assert.ok(existsSync(join(recovered.path, 'wiki', 'concepts', 'demo', 'a.md')));
+
+    // A leftover WITH a change may be an unreviewed proposal: refuse, never
+    // discard it silently.
+    writeFileSync(join(recovered.path, 'wiki', 'concepts', 'demo', 'a.md'), '# A\nchanged\n');
+    await assert.rejects(
+      createWorktree({ workspaceRoot: root, runId }),
+      (error) => error instanceof WorktreeUnavailableError && /already exists/.test(error.message),
+    );
+    await removeWorktree({ workspaceRoot: root, worktreePath: recovered.path, branch: recovered.branch });
+  } finally {
+    execFileSync('git', ['worktree', 'prune'], { cwd: root }).toString('utf8');
+  }
+});
+
 test('every worktree git call declares the workspace safe for foreign mounts', async () => {
   // The workspace is a bind mount whose reported owner can differ from this
   // container's process (Docker Desktop / WSL2), and git then refuses every

@@ -58,7 +58,19 @@ export async function createWorktree({ workspaceRoot, runId }) {
   const branch = branchNameFor(runId);
   const worktreePath = join(workspaceRoot, '.wiki', 'agent-worktrees', runId);
   if (existsSync(worktreePath)) {
-    throw new WorktreeUnavailableError(`worktree already exists for run ${runId}`);
+    // A crashed run can leave its worktree behind, and the run-id sequence
+    // restarts with the process: the next process's `gateway-1` died here
+    // until the 7-day prune. An orphan with NOTHING written is garbage —
+    // recover it and create anew. One WITH changes may carry an unreviewed
+    // proposal, so it is never discarded silently.
+    const changes = await worktreeChanges({ worktreePath }).catch(() => null);
+    if (changes === null || changes.length > 0) {
+      throw new WorktreeUnavailableError(`worktree already exists for run ${runId}`);
+    }
+    await removeWorktree({ workspaceRoot, worktreePath, branch });
+    if (existsSync(worktreePath)) {
+      throw new WorktreeUnavailableError(`worktree already exists for run ${runId}`);
+    }
   }
   await mkdir(dirname(worktreePath), { recursive: true });
   try {

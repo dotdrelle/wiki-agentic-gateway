@@ -42,7 +42,11 @@ export function startGateway({
 
   function nextRunId() {
     sequence += 1;
-    return `gateway-${sequence}`;
+    // Unique across restarts, not just within one process. The sequence
+    // restarts at 1 with the process, so the second process reissued
+    // `gateway-1` and its first curation died on the previous process's
+    // leftover worktree (`worktree already exists for run gateway-1`).
+    return `gateway-${Date.now().toString(36)}-${sequence}`;
   }
 
   function runFor(runId) {
