@@ -196,6 +196,23 @@ const GATEWAY_RECURSION_LIMIT =
   Number.parseInt(process.env.GATEWAY_RECURSION_LIMIT ?? '', 10) || 40;
 const GATEWAY_TOKEN_BUDGET =
   Number.parseInt(process.env.GATEWAY_TOKEN_BUDGET ?? '', 10) || 500_000;
+// The main thread is the workspace memory, and every run appends to it. The
+// checkpoint ceiling alone leaves its PROMPT unbounded — one long report is one
+// checkpoint — and a prompt larger than the model context comes back as
+// "max_tokens must be at least 1, got -N" (the provider's context - prompt
+// arithmetic). Bound the thread by size too.
+function memoryThreadCharCeiling() {
+  return Number.parseInt(process.env.GATEWAY_MEMORY_MAX_THREAD_CHARS ?? '', 10) || 400_000;
+}
+
+// The provider signature of "your prompt already exceeds my context". vLLM /
+// Albert compute the effective max_tokens as context - prompt and refuse a
+// negative one; OpenAI says "maximum context length". Either way the fix is
+// the same: rotate the main thread and retry once.
+export function isContextOverflowError(message) {
+  return /max_tokens must be at least 1|maximum context length|context[_ -]?length|reduce the length of the messages|prompt is too long/i
+    .test(String(message ?? ''));
+}
 // A diff nobody can read is a diff that never gets merged, and the report's
 // rule is explicit refusal rather than accumulation: beyond these bounds the
 // run FAILS loudly (the worktree is removed) instead of queueing a review
@@ -1025,7 +1042,28 @@ export function createAgentRunner({
         // without the sampling params, and REPORT the refused params back to
         // the manager so the workspace config can be corrected.
         const message = error instanceof Error ? error.message : String(error);
-        if (/temperature|sampling|unsupported value|thinking/i.test(message)) {
+        if (isContextOverflowError(message) && typeof saver?.deleteThread === 'function') {
+          // The workspace thread outgrew the model's context — the memory is
+          // cumulative and a long report is a long checkpoint. Drop the thread
+          // (the dossier survives and is re-injected in baseInput) and retry
+          // the assembly once; a degradation is announced, never silent.
+          await saver.deleteThread(threadId).catch(() => {});
+          onEvent?.({
+            type: 'degraded',
+            capability: 'memory',
+            cause: 'the main thread exceeded the model context',
+            fallback: 'the thread was rotated before this assembly; the workspace dossier remains',
+          });
+          events = await mainAgent.invoke(
+            { messages: [{ role: 'user', content: assembleInput }] },
+            {
+              recursionLimit: GATEWAY_RECURSION_LIMIT,
+              ...(signal ? { signal } : {}),
+              configurable: { thread_id: threadId },
+              ...(assemblyCallbacks ? { callbacks: assemblyCallbacks } : {}),
+            },
+          );
+        } else if (/temperature|sampling|unsupported value|thinking/i.test(message)) {
           samplingRefusedByModel.add(rawName);
           for (const key of ['temperature', 'topP', 'seed']) {
             if (Number.isFinite(Number(model?.[key]))) refusedParams.push(key);
@@ -1096,9 +1134,14 @@ export function createAgentRunner({
             });
           }
           const counted = saver.db
-            .prepare('SELECT COUNT(*) AS n FROM checkpoints WHERE thread_id = ?')
+            .prepare('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(checkpoint)), 0) AS bytes FROM checkpoints WHERE thread_id = ?')
             .get(threadId);
-          if (Number(counted?.n ?? 0) > memoryLimitsForRun.maxCheckpoints) {
+          const exceeded = Number(counted?.n ?? 0) > memoryLimitsForRun.maxCheckpoints
+            ? `${counted.n} checkpoints > ${memoryLimitsForRun.maxCheckpoints}`
+            : Number(counted?.bytes ?? 0) > memoryThreadCharCeiling()
+              ? `${counted.bytes} chars > ${memoryThreadCharCeiling()}`
+              : null;
+          if (exceeded) {
             // Say "compacted" only once the thread is actually gone: a swallowed
             // rejection here would report a rotation that never happened.
             if (!saver.deleteThread) throw new Error('the checkpoint saver cannot rotate a thread');
@@ -1106,7 +1149,7 @@ export function createAgentRunner({
             onEvent?.({
               type: 'notice',
               topic: 'memory.compacted',
-              detail: `${counted.n} checkpoints > ${memoryLimitsForRun.maxCheckpoints}`,
+              detail: exceeded,
             });
           }
         } catch (error) {

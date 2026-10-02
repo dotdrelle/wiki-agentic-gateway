@@ -246,8 +246,13 @@ The memory is BOUNDED, in three pieces that ship together:
   When the ceiling abandons an objection it emits a `notice memory.capped`
   naming it — a silent cap would be the same defect it exists to prevent;
 - **compaction**: after a run whose main thread holds more than
-  `GATEWAY_MEMORY_MAX_CHECKPOINTS` checkpoints (default 200), the thread is
-  rotated (`deleteThread`) and a `notice` is emitted — the dossier survives;
+  `GATEWAY_MEMORY_MAX_CHECKPOINTS` checkpoints (default 200) or more than
+  `GATEWAY_MEMORY_MAX_THREAD_CHARS` characters (default 400 000), the thread is
+  rotated (`deleteThread`) and a `notice` is emitted — the dossier survives.
+  A model call whose prompt already exceeds the provider context (vLLM/Albert
+  answer `max_tokens must be at least 1, got -N`) rotates the thread and
+  retries the assembly ONCE, announced as `degraded memory`, so an oversized
+  workspace memory costs the transcript, never the run;
 - **eviction**: at the start of every run, dossiers untouched for more than
   `GATEWAY_MEMORY_TTL_MS` (default 30 days) are purged with their threads, each
   announced as a `notice`. `GATEWAY_MEMORY_MAX_CHARS` (default 4000) bounds the

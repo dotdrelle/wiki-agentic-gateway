@@ -9,7 +9,7 @@ import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
-import { createAgentRunner, createPhaseTracker } from './agent.js';
+import { createAgentRunner, createPhaseTracker, isContextOverflowError } from './agent.js';
 import { createDossierStore } from './dossier.js';
 
 /*
@@ -419,6 +419,88 @@ test('the main thread is compacted past its checkpoint ceiling, dossier kept', a
   } finally {
     if (previous === undefined) delete process.env.GATEWAY_MEMORY_MAX_CHECKPOINTS;
     else process.env.GATEWAY_MEMORY_MAX_CHECKPOINTS = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the provider context-overflow signatures are recognised', () => {
+  assert.equal(isContextOverflowError('max_tokens must be at least 1, got -2305'), true);
+  assert.equal(isContextOverflowError("This model's maximum context length is 131072 tokens"), true);
+  assert.equal(isContextOverflowError('429 rate limit, please retry'), false);
+});
+
+class ContextOverflowOnceModel extends BaseChatModel {
+  constructor() {
+    super({});
+    this.calls = 0;
+  }
+  _llmType() { return 'overflow-once'; }
+  _combineLLMOutput() { return []; }
+  bindTools() { return this; }
+  async _generate() {
+    this.calls += 1;
+    if (this.calls === 1) {
+      throw new Error('400 {"detail":{"error":{"message":"max_tokens must be at least 1, got -2305. (parameter=max_tokens, value=-2305)","type":"BadRequestError","param":"max_tokens","code":400}}}');
+    }
+    return { generations: [{ message: new AIMessage('done'), text: 'done' }], llmOutput: {} };
+  }
+}
+
+test('a context-overflowing main thread is rotated and the assembly retried once', async () => {
+  const { dir, saver } = tempSaver('gateway-overflow-');
+  const degradations = [];
+  const model = new ContextOverflowOnceModel();
+  const runner = createAgentRunner({
+    model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+    mcpServers: [],
+    toolsOverride: [readTool()],
+    roles: [],
+    checkpointer: saver,
+    runId: 'overflow-1',
+    onEvent: (event) => { if (event.type === 'degraded') degradations.push(event); },
+    chatModelOverride: model,
+  });
+  try {
+    const output = await runner.run({ objective: 'audit', capability: 'agent.review', workspace: 'overflow-demo' });
+    assert.equal(model.calls, 2, 'the assembly is retried after the rotation');
+    assert.match(String(output.content ?? ''), /done/);
+    assert.ok(
+      degradations.some((event) => event.capability === 'memory' && /context/.test(String(event.cause))),
+      'the rotation is announced, never silent',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a thread over the character ceiling is rotated like the checkpoint ceiling', async () => {
+  const { dir, saver } = tempSaver('gateway-thread-chars-');
+  const notices = [];
+  const runner = createAgentRunner({
+    model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+    mcpServers: [],
+    toolsOverride: [readTool()],
+    roles: [],
+    checkpointer: saver,
+    runId: 'chars-1',
+    onEvent: (event) => { if (event.type === 'notice') notices.push(event); },
+    chatModelOverride: new StubModel({}),
+  });
+  const previous = process.env.GATEWAY_MEMORY_MAX_THREAD_CHARS;
+  process.env.GATEWAY_MEMORY_MAX_THREAD_CHARS = '1';
+  try {
+    await runner.run({ objective: 'audit', capability: 'agent.review', workspace: 'chars-demo' });
+    assert.ok(
+      notices.some((notice) => notice.topic === 'memory.compacted' && /chars/.test(String(notice.detail))),
+      'the size cap rotates the thread and says why',
+    );
+    const counted = saver.db
+      .prepare('SELECT COUNT(*) AS n FROM checkpoints WHERE thread_id = ?')
+      .get('chars-demo');
+    assert.equal(Number(counted.n), 0, 'the main thread was rotated');
+  } finally {
+    if (previous === undefined) delete process.env.GATEWAY_MEMORY_MAX_THREAD_CHARS;
+    else process.env.GATEWAY_MEMORY_MAX_THREAD_CHARS = previous;
     rmSync(dir, { recursive: true, force: true });
   }
 });
