@@ -8,7 +8,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
 import { COLLECTIVE_ROLE_GRAPH, createAgentRunner, dependencyRoles } from './agent.js';
-import { extractObjections, extractResolutions } from './collective.js';
+import { extractObjections, extractRebuildOwned, extractResolutions } from './collective.js';
 
 // Scripted model: responses are consumed in order, the last one repeats.
 // FakeListChatModel formats responses as TEXT (tool_calls are dropped), so a
@@ -165,6 +165,54 @@ test('role frontiers: the Critique never sees the write tools, the Redactor does
   } finally {
     process.env.GATEWAY_WORKSPACES_ROOT = previous;
   }
+});
+
+test('a Redactor that writes nothing on purpose yields a rebuild outcome, not a degradation', async () => {
+  const { root } = gitWorkspace('demo');
+  const previous = process.env.GATEWAY_WORKSPACES_ROOT;
+  process.env.GATEWAY_WORKSPACES_ROOT = root;
+  const events = [];
+  const model = new ScriptedChatModel({
+    responses: [
+      'wiki/concepts/demo/a.md lacks sources: — a generated pivot',
+      'Nothing to write.\n[rebuild-owned] wiki/concepts/demo/a.md is a generated pivot; a TAXO rebuild fixes it.',
+      'assembled',
+    ],
+  });
+  try {
+    const runner = createAgentRunner({
+      model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+      mcpServers: [],
+      toolsOverride: [fakeMcpTool()],
+      worktree: true,
+      roles: ['analyst', 'redactor'],
+      checkpointer: false,
+      runId: 'collective-rebuild-owned',
+      chatModelOverride: model,
+      onEvent: (event) => events.push(event),
+    });
+    const output = await runner.run({
+      objective: 'curate the workspace',
+      capability: 'agent.curate',
+      systemPrompt: 'You are Donna.',
+      workspace: 'demo',
+    });
+    assert.deepEqual(output.curationOutcome, {
+      kind: 'rebuild_owned',
+      reason: 'wiki/concepts/demo/a.md is a generated pivot; a TAXO rebuild fixes it.',
+    });
+    assert.ok(!(output.degradations ?? []).some((entry) => entry.role === 'redactor'), 'a deliberate no-op is not a degraded Redactor');
+    assert.ok(events.some((event) => event.type === 'notice' && event.topic === 'curation.rebuild-owned'), 'the outcome is announced');
+    assert.equal(output.worktreeProposal.changes.length, 0);
+  } finally {
+    process.env.GATEWAY_WORKSPACES_ROOT = previous;
+  }
+});
+
+test('extractRebuildOwned reads only the tagged line', () => {
+  assert.equal(extractRebuildOwned('I rewrote nothing, a rebuild would help'), null);
+  assert.equal(extractRebuildOwned('done\n[rebuild-owned] pivots only'), 'pivots only');
+  assert.match(extractRebuildOwned('[rebuild-owned]'), /TAXO rebuild/);
 });
 
 test('the Archivist closes an objection by naming it, and only then', () => {

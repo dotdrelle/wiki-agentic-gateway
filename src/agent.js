@@ -19,6 +19,7 @@ import {
   COLLECTIVE_ROLE_NAMES,
   COLLECTIVE_ROLE_SPECS,
   extractObjections,
+  extractRebuildOwned,
   extractResolutions,
 } from './collective.js';
 import { createDossierStore, renderDossierSection } from './dossier.js';
@@ -1167,6 +1168,7 @@ export function createAgentRunner({
       // the unresolved objections. The worktree stays in place until the
       // merge/reject side removes it.
       let worktreeProposal = null;
+      let curationOutcome = null;
       if (worktreeState) {
         const changes = await worktreeChanges({ worktreePath: worktreeState.path });
         const diff = await worktreeDiff({ worktreePath: worktreeState.path });
@@ -1191,7 +1193,18 @@ export function createAgentRunner({
         // Logs read. Observed on acpi: the Redactor described its corrections
         // in prose, on a branch name it invented, and the run read as a
         // success. The branch itself is left as the other paths leave it.
-        if (changes.length === 0 && enabledRoles.includes('redactor')) {
+        // Unless the Redactor wrote nothing ON PURPOSE: every finding was on
+        // a generated pivot, which a TAXO rebuild fixes, not a curation. That
+        // is an outcome, not a degradation — the manager words it as "nothing
+        // to curate, rebuild", instead of a failure telling the human to
+        // re-run what would only reproduce the same empty branch.
+        const rebuildOwned = changes.length === 0 && enabledRoles.includes('redactor')
+          ? extractRebuildOwned(roleOutputs.redactor)
+          : null;
+        if (rebuildOwned) {
+          curationOutcome = { kind: 'rebuild_owned', reason: rebuildOwned };
+          onEvent?.({ type: 'notice', topic: 'curation.rebuild-owned', detail: rebuildOwned });
+        } else if (changes.length === 0 && enabledRoles.includes('redactor')) {
           onEvent?.({
             type: 'degraded',
             capability: 'role:redactor',
@@ -1227,6 +1240,7 @@ export function createAgentRunner({
       return {
         content: finalContent,
         ...(worktreeProposal ? { worktreeProposal } : {}),
+        ...(curationOutcome ? { curationOutcome } : {}),
         ...(refusedParams.length > 0 ? { refusedParams } : {}),
         // What the run lost on the way. It rides on the RESULT, not only on
         // the event stream, so a reader who opens the proposal later — after

@@ -88,7 +88,9 @@ export const COLLECTIVE_ROLE_SPECS = {
       // ls/grep re-audits and wrote nothing, producing an empty branch the
       // manager could only fail. The handoff is the audit; the Redactor writes.
       'Do not re-audit the corpus: your handoff already names the files and the corrections. Do not spend steps listing or grepping — a write_file or edit_file must be your first action.',
-      'If EVERY finding concerns generated wiki/concepts/ pivots — navigation pages ingestion regenerates — write nothing and say in one line that a TAXO rebuild fixes them, not a curation.',
+      // The line is a FIELD, like [objection]: the gateway reads it to tell a
+      // deliberate no-op from a Redactor that failed to write.
+      'If EVERY finding concerns generated wiki/concepts/ pivots — navigation pages ingestion regenerates — write nothing and end with exactly one line: [rebuild-owned] <one sentence naming the pivots a TAXO rebuild fixes>.',
     ].join('\n'),
   },
   archivist: {
@@ -126,6 +128,19 @@ export function extractObjections(content) {
     objections.push({ severity: match[1].toLowerCase(), path, statement });
   }
   return objections;
+}
+
+/**
+ * The Redactor's `[rebuild-owned] <reason>` line: it wrote nothing on purpose,
+ * because every finding is on a generated pivot a TAXO rebuild regenerates.
+ * Returns the reason, or null when the line is absent.
+ */
+export function extractRebuildOwned(content) {
+  for (const line of String(content ?? '').split('\n')) {
+    const match = /^\s*\[rebuild-owned\]\s*(.*)$/i.exec(line.trim());
+    if (match) return match[1].trim() || 'every finding is on a generated pivot a TAXO rebuild regenerates';
+  }
+  return null;
 }
 
 /**

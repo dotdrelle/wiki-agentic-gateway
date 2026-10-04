@@ -216,6 +216,9 @@ export function startGateway({
         ...(Array.isArray(output?.degradations) && output.degradations.length > 0
           ? { degradations: output.degradations }
           : {}),
+        // A deliberate empty curation (every finding on a generated pivot):
+        // the manager reports "rebuild", not a failed curation.
+        ...(output?.curationOutcome ? { curationOutcome: output.curationOutcome } : {}),
         ...(Array.isArray(output?.refusedParams) && output.refusedParams.length > 0
           ? { refusedParams: output.refusedParams }
           : {}),
