@@ -1,4 +1,9 @@
 import test from 'node:test';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+// The runner opens the real checkpointer: keep its memory.sqlite out of the repo.
+process.env.GATEWAY_CONFIG_DIR ??= mkdtempSync(join(tmpdir(), 'gateway-maintenance-test-'));
 import assert from 'node:assert/strict';
 import { maintenanceTools,MAINTENANCE_TOOL_NAMES,createMaintenanceRunner } from './maintenance.js';
 import { createGatewayBoundaryMiddleware,buildGatewayAgent } from './agent.js';
@@ -11,3 +16,4 @@ test('no actionable fact means no model call',async()=>{let calls=0;const runner
 test('maintenance cannot execute harness tools even if the model invents one',async()=>{const boundary=createGatewayBoundaryMiddleware({allowedToolNames:MAINTENANCE_TOOL_NAMES});const result=await boundary.wrapToolCall({toolCall:{name:'write_file',id:'bad'}},()=>{throw new Error('executed');});assert.equal(result.status,'error');});
 test('the real deepagents boundary exposes exactly maintenance tools and settles model budget',async()=>{const seen=[];let settled=0;const {tools}=maintenanceTools(authority);const agent=buildGatewayAgent({tools,chatModel:new FakeListChatModel({responses:[new AIMessage({content:'done'})]}),onModelCall:async names=>{seen.push(...names);return ()=>{settled++;};}});await agent.invoke({messages:[{role:'user',content:'maintain'}]},{recursionLimit:6});assert.deepEqual([...new Set(seen)],MAINTENANCE_TOOL_NAMES);assert.equal(settled,1);});
 test('authority refuses credentials in URLs and unsupported protocols',()=>{for(const endpoint of ['file:///tmp/a','http://user:pass@example.org'])assert.throws(()=>maintenanceTools({...authority,endpoint}));});
+test('a model that decides nothing is retried once, then the due actions run in canonical order',async()=>{const commands=[];const events=[];const fetchImpl=async(_url,args)=>{const body=JSON.parse(args.body);commands.push(body);if(body.command==='state')return Response.json({candidates:[{action:'build',target:'templates/a.md',mode:'auto',summary:'Rebuild a'},{action:'ingest',target:'raw/untracked',mode:'ask',summary:'Ingest 2'}]});if(body.command==='action')return Response.json({status:body.action==='ingest'?'pending':'done'});return Response.json({ok:true});};const runner=createMaintenanceRunner({model:{baseUrl:'http://model.local/v1',model:'fake'},authority,fetchImpl,onEvent:(e)=>events.push(e),chatModelOverride:new FakeListChatModel({responses:['\n\n','\n\n']})});const result=await runner.run({workspace:{name:'demo'},objective:'maintain'});assert.deepEqual(commands.filter(c=>c.command==='action').map(c=>c.action),['ingest','build']);assert.equal(events.filter(e=>e.type==='degraded'&&e.capability==='maintenance-decision').length,2);assert.match(result.content,/canonical order/);});
