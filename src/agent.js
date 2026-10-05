@@ -47,6 +47,23 @@ export function gatewayCheckpointer() {
   return sharedCheckpointer;
 }
 
+// LangChain's agent node binds tools WITHOUT `tool_choice`. On some
+// OpenAI-compatible endpoints "absent" is not "auto": Albert's
+// deepseek-v4-flash answers an empty `\n\n` instead of calling a tool when
+// the field is omitted, while gpt-oss calls by default. The gateway makes
+// the choice explicit on every tool binding — and only there, since a
+// `tool_choice` without tools is refused by strict providers. An explicit
+// caller choice (none/required/forced function) wins.
+export function withExplicitToolChoice(chatModel) {
+  const bind = chatModel?.bindTools?.bind(chatModel);
+  if (!bind) return chatModel;
+  chatModel.bindTools = (tools, options) => bind(tools, {
+    ...(options ?? {}),
+    tool_choice: options?.tool_choice ?? 'auto',
+  });
+  return chatModel;
+}
+
 // The dossier store, cached per saver: it writes through the SAME connection as
 // the checkpointer (its own table), so a run never opens a second writer on
 // memory.sqlite.
@@ -638,7 +655,7 @@ export function createAgentRunner({
     const maxTokens = Number(model?.maxTokens);
     if (Number.isFinite(maxTokens)) params.maxTokens = maxTokens;
     if (typeof model?.reasoningEffort === 'string' && model.reasoningEffort) params.reasoningEffort = model.reasoningEffort;
-    return initChatModel(rawName, params);
+    return withExplicitToolChoice(await initChatModel(rawName, params));
   }
 
   return {
