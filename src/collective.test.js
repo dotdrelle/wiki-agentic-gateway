@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
@@ -52,6 +52,48 @@ function fakeMcpTool() {
     schema: z.object({ path: z.string() }),
   });
 }
+
+function fakePageInventory(pages) {
+  return tool(async () => pages.join('\n'), {
+    name: 'wiki__wiki_list_pages',
+    description: 'list wiki pages',
+    schema: z.object({}),
+  });
+}
+
+test('curation with no source fiche exits before starting roles or creating a worktree', async () => {
+  const { root } = gitWorkspace('empty');
+  const previous = process.env.GATEWAY_WORKSPACES_ROOT;
+  process.env.GATEWAY_WORKSPACES_ROOT = root;
+  const events = [];
+  const model = new ScriptedChatModel({ responses: ['should not be called'] });
+  try {
+    const runner = createAgentRunner({
+      model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+      mcpServers: [],
+      toolsOverride: [fakePageInventory(['wiki/index.md [other]', 'wiki/concepts/demo.md [other]'])],
+      worktree: true,
+      roles: ['scout', 'analyst', 'critique', 'redactor', 'archivist'],
+      checkpointer: false,
+      runId: 'empty-curation',
+      chatModelOverride: model,
+      onEvent: (event) => events.push(event),
+    });
+    const output = await runner.run({
+      objective: 'curate the workspace',
+      capability: 'agent.curate',
+      systemPrompt: 'You are Donna.',
+      workspace: 'empty',
+    });
+    assert.equal(model.counter.i, 0, 'no LLM call is made');
+    assert.deepEqual(output.curationOutcome.kind, 'nothing_to_curate');
+    assert.match(output.content, /ingest source documents before running curation/);
+    assert.ok(events.some((event) => event.type === 'notice' && event.topic === 'curation.nothing-to-curate'));
+    assert.equal(existsSync(join(root, 'empty', '.wiki', 'agent-worktrees', 'empty-curation')), false);
+  } finally {
+    process.env.GATEWAY_WORKSPACES_ROOT = previous;
+  }
+});
 
 function gitWorkspace(name) {
   const root = mkdtempSync(join(tmpdir(), 'gateway-collective-root-'));

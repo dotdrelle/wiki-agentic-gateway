@@ -663,6 +663,40 @@ export function createAgentRunner({
       // The runtime's EYES, loaded per run. toolsOverride is the offline test
       // seam; production always resolves the MCP pool.
       const tools = toolsOverride ?? (await loadMcpTools(mcpServers));
+      // Curation edits TAXO source fiches only. Avoid starting five model roles
+      // (and creating a worktree) when the workspace has no eligible material.
+      // If the read tool is unavailable or fails, degrade and continue with
+      // the normal review rather than silently treating an unknown corpus as empty.
+      if (capability === 'agent.curate' && worktree) {
+        const listPages = tools.find((entry) => /(?:^|__)wiki_list_pages$/.test(String(entry?.name ?? '')));
+        if (listPages?.invoke) {
+          try {
+            const inventory = await listPages.invoke({});
+            const text = typeof inventory === 'string'
+              ? inventory
+              : Array.isArray(inventory?.content)
+                ? inventory.content.map((item) => String(item?.text ?? '')).join('\n')
+                : String(inventory?.content ?? inventory?.text ?? '');
+            const hasSourceFiche = text.split(/\r?\n/).some((line) =>
+              /^wiki\/sources\/[^\s]+\.md\s+\[\w+\]$/.test(line.trim()),
+            );
+            if (!hasSourceFiche) {
+              const reason = 'No wiki/sources fiche exists yet; ingest source documents before running curation.';
+              onEvent?.({ type: 'notice', topic: 'curation.nothing-to-curate', detail: reason });
+              return {
+                content: reason,
+                curationOutcome: { kind: 'nothing_to_curate', reason },
+              };
+            }
+          } catch (error) {
+            onEvent?.({
+              type: 'degraded', capability: 'curation-preflight',
+              cause: error instanceof Error ? error.message : String(error),
+              fallback: 'the source inventory could not be checked; curation continues',
+            });
+          }
+        }
+      }
       const enabledRoles = COLLECTIVE_ORDER.filter((role) =>
         roles.map(String).includes(role),
       );
