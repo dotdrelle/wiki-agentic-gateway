@@ -1,3 +1,4 @@
+import { createMaintenanceRunner, maintenanceJournal } from './maintenance.js';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createAgentRunner } from './agent.js';
@@ -28,6 +29,11 @@ export function startGateway({
   now = () => new Date(),
 } = {}) {
   const runs = new Map();
+  let journal = null;
+  const getJournal = () => journal ??= maintenanceJournal();
+  if (config?.capabilities?.some((c) => c.name === 'agent.maintain')) {
+    for (const saved of getJournal().all()) runs.set(saved.runId, { ...saved, status: TERMINAL.has(saved.status) ? saved.status : 'recovering', streams: new Set(), controller: new AbortController(), maintenance: saved.maintenance });
+  }
   // Local, content-free phase metrics: the measurement the lot 6 gate reads.
   const metrics = createPhaseMetrics();
   let sequence = 0;
@@ -89,6 +95,7 @@ export function startGateway({
         );
       }
     }
+    if (run.maintenance) getJournal().put(run);
     for (const stream of run.streams) stream.write(stamped);
   }
 
@@ -130,6 +137,7 @@ export function startGateway({
   // static gateway config.
   const resolveRunner = createRunner ?? ((run, model, request) => {
     const capability = capabilityFor(String(request.capability ?? ''));
+    if (capability?.name === 'agent.maintain') return createMaintenanceRunner({ model, authority: request.maintenance, signal: run.controller.signal, onEvent: (event) => emit(run, event), runId: run.runId });
     return createAgentRunner({
       model,
       mcpServers: request.mcp ?? [],
@@ -181,6 +189,7 @@ export function startGateway({
       const runModel = request.model ?? null;
       if (!runModel?.baseUrl || !(runModel.model || runModel.name)) {
         run.status = 'failed';
+      if (run.maintenance) getJournal().put(run);
         run.error = 'no model: the manager must send the active profile model with every run';
         emit(run, { type: 'run_failed', error: run.error });
         return;
@@ -231,10 +240,12 @@ export function startGateway({
       emit(run, { type: 'message', content });
       emit(run, { type: 'run_completed' });
       run.status = 'completed';
+      if (run.maintenance) getJournal().put(run);
     } catch (error) {
       if (error?.name === 'AbortError' || run.aborted) {
         emit(run, { type: 'run_cancelled' });
         run.status = 'cancelled';
+        if (run.maintenance) getJournal().put(run);
         return;
       }
       run.error = error instanceof Error ? error.message : String(error);
@@ -317,9 +328,13 @@ export function startGateway({
             served,
           });
         }
-        const runId = nextRunId();
+        if (requested === 'agent.maintain' && (!body.maintenance?.cycleId || !body.maintenance?.token || !body.maintenance?.endpoint)) return sendJson(response, 400, { error: 'Maintenance authority required' });
+        const previous = requested === 'agent.maintain' ? [...runs.values()].find((r) => r.maintenance?.cycleId === body.maintenance.cycleId) : null;
+        if (previous && previous.status !== 'recovering') return sendJson(response, 200, { runId: previous.runId, status: previous.status });
+        const runId = previous?.runId ?? nextRunId();
         const run = {
           runId,
+          ...(requested === 'agent.maintain' ? { maintenance: { cycleId: body.maintenance.cycleId } } : {}),
           status: 'running',
           events: [],
           streams: new Set(),
@@ -335,6 +350,7 @@ export function startGateway({
           }),
         };
         runs.set(runId, run);
+        if (run.maintenance) getJournal().put(run);
         void executeRun(run, body);
         sendJson(response, 200, { runId, status: 'running' });
       });
@@ -396,6 +412,7 @@ export function startGateway({
         run.aborted = true;
         run.controller.abort();
         run.status = 'cancelled';
+        if(run.maintenance)getJournal().put(run);
         stopHeartbeat(run);
         run.rejectApproval?.(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
         return sendJson(response, 200, { ok: true });

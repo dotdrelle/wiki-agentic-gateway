@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { maintenanceTools,MAINTENANCE_TOOL_NAMES,createMaintenanceRunner } from './maintenance.js';
+import { createGatewayBoundaryMiddleware,buildGatewayAgent } from './agent.js';
+import { FakeListChatModel } from '@langchain/core/utils/testing';
+import { AIMessage } from 'langchain';
+const authority={endpoint:'http://manager.local',token:'cycle-secret',cycleId:'cycle'};
+test('maintenance has only state and nine narrow tools, no approval, filesystem or generic execution',()=>{const {tools}=maintenanceTools(authority);assert.deepEqual(tools.map(t=>t.name),MAINTENANCE_TOOL_NAMES);for(const name of ['task','write_file','maintenance_approve','agent_execute','shell'])assert.ok(!tools.some(t=>t.name===name));});
+test('scoped bridge sends only the canonical candidate selector and cycle credential',async()=>{let request;const {tools}=maintenanceTools(authority,{fetchImpl:async(url,args)=>{request={url,args};return Response.json({status:'pending'});}});await tools.find(t=>t.name==='maintenance_ingest').invoke({target:'raw/untracked'});assert.equal(request.args.headers.authorization,'Bearer cycle-secret');assert.deepEqual(JSON.parse(request.args.body),{cycleId:'cycle',command:'action',action:'ingest',target:'raw/untracked'});});
+test('no actionable fact means no model call',async()=>{let calls=0;const runner=createMaintenanceRunner({authority,fetchImpl:async()=>{calls++;return Response.json({candidates:[]});}});const result=await runner.run({workspace:{name:'demo'}});assert.equal(calls,1);assert.match(result.content,/no model call/);});
+test('maintenance cannot execute harness tools even if the model invents one',async()=>{const boundary=createGatewayBoundaryMiddleware({allowedToolNames:MAINTENANCE_TOOL_NAMES});const result=await boundary.wrapToolCall({toolCall:{name:'write_file',id:'bad'}},()=>{throw new Error('executed');});assert.equal(result.status,'error');});
+test('the real deepagents boundary exposes exactly maintenance tools and settles model budget',async()=>{const seen=[];let settled=0;const {tools}=maintenanceTools(authority);const agent=buildGatewayAgent({tools,chatModel:new FakeListChatModel({responses:[new AIMessage({content:'done'})]}),onModelCall:async names=>{seen.push(...names);return ()=>{settled++;};}});await agent.invoke({messages:[{role:'user',content:'maintain'}]},{recursionLimit:6});assert.deepEqual([...new Set(seen)],MAINTENANCE_TOOL_NAMES);assert.equal(settled,1);});
+test('authority refuses credentials in URLs and unsupported protocols',()=>{for(const endpoint of ['file:///tmp/a','http://user:pass@example.org'])assert.throws(()=>maintenanceTools({...authority,endpoint}));});

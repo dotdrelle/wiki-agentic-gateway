@@ -40,7 +40,7 @@ const samplingRefusedByModel = new Set();
 // so every run of a workspace resumes the same conversation. The collective's
 // ROLE threads are keyed by run instead: see resolveMemoryScope below.
 let sharedCheckpointer = null;
-function gatewayCheckpointer() {
+export function gatewayCheckpointer() {
   if (sharedCheckpointer) return sharedCheckpointer;
   const dir = process.env.GATEWAY_CONFIG_DIR ?? process.cwd();
   sharedCheckpointer = SqliteSaver.fromConnString(join(dir, 'memory.sqlite'));
@@ -246,8 +246,8 @@ export function createGatewayBoundaryMiddleware({
           throw error;
         }
       }
-      onModelCall?.(tools?.map((entry) => String(entry?.name ?? '')) ?? []);
-      return handler({ ...request, tools });
+      const settled = await onModelCall?.(tools?.map((entry) => String(entry?.name ?? '')) ?? []);
+      try { return await handler({ ...request, tools }); } finally { if (typeof settled === 'function') await settled(); }
     },
     async wrapToolCall(request, handler) {
       const name = String(request?.toolCall?.name ?? '');
@@ -605,8 +605,12 @@ export function createAgentRunner({
   roles = [],
   runId = null,
   memoryScope = null,
+  // A run with its own dossier (maintenance) must neither read nor fold into the
+  // curation collective's workspace dossier; null keeps the workspace one.
+  dossierScope = null,
   chatModelOverride = null,
   toolsOverride = null,
+  onModelCall = null,
   onRoleModelCall = null,
 }) {
   const baseUrl = model?.baseUrl ?? null;
@@ -656,6 +660,7 @@ export function createAgentRunner({
       const memory = resolveMemoryScope({ supplied: memoryScope, workspace: runWorkspace });
       const threadId = memory.scope;
       const roleThreadBase = `${memory.workspaceKey}:${runId ?? 'run'}`;
+      const dossierKey = dossierScope && String(dossierScope).startsWith(`${memory.workspaceKey}:`) ? String(dossierScope) : memory.workspaceKey;
       const roleSet = new Set(enabledRoles);
       // The shared tracker is the ASSEMBLY phase only: each role counts its own
       // tools, because with roles in flight together a single global counter
@@ -694,7 +699,7 @@ export function createAgentRunner({
             }
           }
           dossierSection = renderDossierSection(
-            dossierStore.read(memory.workspaceKey),
+            dossierStore.read(dossierKey),
             {
               maxChars: memoryLimitsForRun.maxChars,
               onTruncated: ({ omittedChars }) => onEvent?.({
@@ -1006,6 +1011,7 @@ export function createAgentRunner({
         : baseInput;
 
       const mainAgent = buildGatewayAgent({
+        onModelCall,
         chatModel: chatModelOverride ?? (await resolveChatModel()),
         tools,
         systemPrompt,
@@ -1108,7 +1114,7 @@ export function createAgentRunner({
           // it, not resolved it — so silence never removes one.
           const resolutions = extractResolutions(archivist);
           if (resolutions.length > 0) {
-            dossierStore.resolveObjections(memory.workspaceKey, resolutions);
+            dossierStore.resolveObjections(dossierKey, resolutions);
           }
           // A `[resolved]` line is an instruction to the memory, not memory.
           const summary = archivist
@@ -1116,7 +1122,7 @@ export function createAgentRunner({
             .filter((line) => !/^\s*\[resolved\]/i.test(line))
             .join('\n');
           const { dropped } = dossierStore.writeWithReport(
-            memory.workspaceKey,
+            dossierKey,
             String(runWorkspace?.name ?? runWorkspace ?? ''),
             { summary, objections },
           );
@@ -1267,7 +1273,7 @@ function relativeWorkspacePath(workspaceRoot, worktreePath) {
 // per-run by nature — nothing static here, and nothing outside the declared
 // allow-list is exposed. The connection stays alive for the run (the tools
 // hold it), so the client is deliberately not closed.
-async function loadMcpTools(servers) {
+export async function loadMcpTools(servers) {
   const connections = {};
   const declared = new Set();
   for (const server of servers ?? []) {
