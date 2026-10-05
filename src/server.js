@@ -259,6 +259,7 @@ export function startGateway({
       // handle holding the run object alive.
       stopHeartbeat(run);
       run.finishedAt = Date.now();
+      if(run.maintenance)getJournal().put(run);
       // A finished run closes its streams: a subscriber must not hang on a
       // connection that will never carry another event.
       for (const stream of run.streams) stream.close();
@@ -329,7 +330,9 @@ export function startGateway({
           });
         }
         if (requested === 'agent.maintain' && (!body.maintenance?.cycleId || !body.maintenance?.token || !body.maintenance?.endpoint)) return sendJson(response, 400, { error: 'Maintenance authority required' });
-        const previous = requested === 'agent.maintain' ? [...runs.values()].find((r) => r.maintenance?.cycleId === body.maintenance.cycleId) : null;
+        const inMemory = requested === 'agent.maintain' ? [...runs.values()].find((r) => r.maintenance?.cycleId === body.maintenance.cycleId) : null;
+        const saved = !inMemory && requested === 'agent.maintain' ? getJournal().byCycle(body.maintenance.cycleId) : null;
+        const previous = inMemory ?? (saved ? {...saved, status: TERMINAL.has(saved.status) ? saved.status : 'recovering'} : null);
         if (previous && previous.status !== 'recovering') return sendJson(response, 200, { runId: previous.runId, status: previous.status });
         const runId = previous?.runId ?? nextRunId();
         const run = {
@@ -358,7 +361,11 @@ export function startGateway({
     if (runMatch) {
       const runId = runMatch[1];
       const sub = runMatch[2];
-      const run = runs.get(runId);
+      // Finished maintenance receipts outlive the bounded replay buffer.
+      // Hydrate them on demand so a late manager can settle, or replay the
+      // same cycle identity without creating another run.
+      let run = runs.get(runId);
+      if(!run&&journal){const saved=journal.byId(runId);if(saved&&TERMINAL.has(saved.status)){run={...saved,streams:new Set(),controller:new AbortController()};runs.set(runId,run);}}
       if (!run) return sendJson(response, 404, { error: `unknown run ${runId}` });
 
       if (sub === '/events' && request.method === 'GET') {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { tool } from 'langchain';
 import { z } from 'zod';
 import { createAgentRunner, gatewayCheckpointer, loadMcpTools } from './agent.js';
@@ -10,6 +11,8 @@ export function maintenanceJournal() {
   const saver=gatewayCheckpointer();saver.setup();const db=saver.db;
   db.exec('CREATE TABLE IF NOT EXISTS maintenance_gateway_runs(id TEXT PRIMARY KEY, cycle TEXT UNIQUE NOT NULL, payload TEXT NOT NULL)');
   return {
+    byId:(id)=>{const row=db.prepare('SELECT payload FROM maintenance_gateway_runs WHERE id=?').get(id);return row?JSON.parse(row.payload):null;},
+    byCycle:(cycle)=>{const row=db.prepare('SELECT payload FROM maintenance_gateway_runs WHERE cycle=?').get(cycle);return row?JSON.parse(row.payload):null;},
     all:()=>db.prepare('SELECT payload FROM maintenance_gateway_runs ORDER BY rowid DESC LIMIT 100').all().map((r)=>JSON.parse(r.payload)),
     put:(run)=>db.prepare('INSERT INTO maintenance_gateway_runs VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(run.runId,run.maintenance.cycleId,JSON.stringify({runId:run.runId,status:run.status,result:run.result,error:run.error,maintenance:{cycleId:run.maintenance.cycleId},events:run.events,sequence:run.sequence,finishedAt:run.finishedAt})),
   };
@@ -17,7 +20,7 @@ export function maintenanceJournal() {
 export function maintenanceTools(authority,{signal,fetchImpl=fetch,onEvent}={}) {
   const endpoint=new URL(authority.endpoint);
   if(!['http:','https:'].includes(endpoint.protocol)||endpoint.username||endpoint.password)throw new Error('Invalid maintenance authority endpoint');
-  let modelCalls=0;const invoked=[];
+  const invoked=[];
   async function bridge(command,args={},requestSignal=signal) {
     const response=await fetchImpl(new URL('/maintenance/bridge',endpoint),{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${authority.token}`},body:JSON.stringify({cycleId:authority.cycleId,command,...args}),signal:requestSignal});
     const data=await response.json();if(!response.ok)throw new Error(data.error??'maintenance_authority_unavailable');return data;
@@ -35,7 +38,7 @@ export function maintenanceTools(authority,{signal,fetchImpl=fetch,onEvent}={}) 
       return JSON.stringify(result).slice(0,12000);
     },{name:'maintenance_'+action,description:`Perform only the current ${action} candidate. Manager checks policy, exact human decision, resource priority and reserved budget. Waits for final job result. Never polls the model.`,schema:z.object({target:z.string().min(1).max(500),operation:z.enum(['export','polish']).optional()})}));
   }
-  return {tools,bridge,invoked,onModelCall:async()=>{const call=++modelCalls;await bridge('model',{call});return ()=>bridge('model_done',{call},undefined);}};
+  return {tools,bridge,invoked,onModelCall:async()=>{const call=randomUUID();await bridge('model',{call});return ()=>bridge('model_done',{call},undefined);}};
 }
 export function createMaintenanceRunner({model,authority,signal,onEvent,runId,chatModelOverride,fetchImpl}) {
   const {tools,bridge,invoked,onModelCall}=maintenanceTools(authority,{signal,onEvent,fetchImpl});
