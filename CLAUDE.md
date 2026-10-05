@@ -225,7 +225,10 @@ another executor, another trust model.
 - `src/procedureImporter.js` accepts the compatible subset of the Claude/Codex
   `SKILL.md` format and produces an explicit report (`imported` / `adapted` /
   `refused` with reason). A procedure that needs a shell, a browser, a secret or
-  a direct write is refused, never imported silently;
+  a direct write is refused, never imported silently. It is reachable as
+  `node bin/wiki-agentic-gateway.js import-procedure <SKILL.md> [--write]
+  [--dir <scopeDir>]`: a preview by default, writing only with `--write` (into
+  `--dir` or `GATEWAY_PROCEDURES_TEAM_DIR`);
 - `GET /procedures` is the read-only diagnostic: available, shadowed and
   malformed entries with their declared prerequisites.
 
@@ -307,7 +310,7 @@ src/collective.js             The six role specs (data only; assembly lives in a
 src/dossier.js                Per-workspace factual dossier, same memory.sqlite
 src/metrics.js                Content-free phase metrics (bounded sliding window)
 src/procedures.js             Scoped procedure registry, sanitized catalogue, confined body read
-src/procedureImporter.js      Claude/Codex SKILL.md subset importer (imported/adapted/refused)
+src/procedureImporter.js      Claude/Codex SKILL.md subset importer (imported/adapted/refused; import-procedure CLI)
 src/worktree.js               Confined worktree backend (canonical read AND write confinement)
 src/config.js                 capabilities from the manager's agent-runtimes.json (own entry), token from env
 src/frontier.test.js          Contract test: the model sees exactly the declared MCP pool

@@ -25,7 +25,12 @@ GET  /runs/:id/events   → SSE `data: {json}\n\n`, replay then live (stream_epo
 ```bash
 npm install
 node bin/wiki-agentic-gateway.js        # GATEWAY_PORT (7789), GATEWAY_AUTH_TOKEN
+node bin/wiki-agentic-gateway.js import-procedure <SKILL.md> [--write] [--dir <scopeDir>]
 ```
+
+`import-procedure` previews the compatible Claude/Codex `SKILL.md` subset — the
+report is `imported`, `adapted` or `refused` with the reason — and writes only
+with `--write`, into `--dir` or `GATEWAY_PROCEDURES_TEAM_DIR`.
 
 or via Docker: `dotdrelle/wiki-agentic-gateway` (port 7789, image ships git for
 the worktree runs).
