@@ -213,7 +213,7 @@ export function createProcedureReadTool(registry, { role = null, allowedToolName
 const GATEWAY_RECURSION_LIMIT =
   Number.parseInt(process.env.GATEWAY_RECURSION_LIMIT ?? '', 10) || 40;
 const GATEWAY_TOKEN_BUDGET =
-  Number.parseInt(process.env.GATEWAY_TOKEN_BUDGET ?? '', 10) || 500_000;
+  Number.parseInt(process.env.GATEWAY_TOKEN_BUDGET ?? '', 10) || 2_000_000;
 // The main thread is the workspace memory, and every run appends to it. The
 // checkpoint ceiling alone leaves its PROMPT unbounded — one long report is one
 // checkpoint — and a prompt larger than the model context comes back as

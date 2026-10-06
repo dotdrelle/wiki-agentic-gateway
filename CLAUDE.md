@@ -52,7 +52,7 @@ workspace is reachable through them — but without the boundary the model is
 - `buildGatewayAgent` is the single assembly used by both the runner and the
   contract test, with the backend declared explicitly;
 - ceilings that did not exist: `GATEWAY_RECURSION_LIMIT` (default 40) and
-  `GATEWAY_TOKEN_BUDGET` (default 500 000). The budget is a **cumulative
+  `GATEWAY_TOKEN_BUDGET` (default 2 000 000). The budget is a **cumulative
   per-agent estimate** — each role run and the assembly gets its own
   accumulator, checked with the harness's counter before every model call, so
   it is not a shared run-wide cap and a whole-corpus curation may need it
