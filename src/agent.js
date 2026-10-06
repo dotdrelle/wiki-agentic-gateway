@@ -654,7 +654,13 @@ export function createAgentRunner({
     }
     const maxTokens = Number(model?.maxTokens);
     if (Number.isFinite(maxTokens)) params.maxTokens = maxTokens;
-    if (typeof model?.reasoningEffort === 'string' && model.reasoningEffort) params.reasoningEffort = model.reasoningEffort;
+    // As a raw `reasoning_effort`: LangChain's own `reasoningEffort` is only
+    // forwarded for the model names it knows as reasoning models (o*, gpt-5*),
+    // so it silently vanished for gpt-6-luna or deepseek — and gpt-6-luna
+    // refuses tools unless it is 'none'. modelKwargs always reach the request.
+    if (typeof model?.reasoningEffort === 'string' && model.reasoningEffort) {
+      params.modelKwargs = { ...(params.modelKwargs ?? {}), reasoning_effort: model.reasoningEffort };
+    }
     return withExplicitToolChoice(await initChatModel(rawName, params));
   }
 
