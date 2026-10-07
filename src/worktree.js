@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, realpathSync } from 'node:fs';
-import { mkdir, readdir, realpath, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, realpath, readFile, rm, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
 
@@ -22,7 +22,7 @@ export function workspaceRootFor(workspace) {
   return join(process.env.GATEWAY_WORKSPACES_ROOT ?? '/workspaces', name);
 }
 
-async function git(args, cwd) {
+async function git(args, cwd, env = null) {
   // The workspace is a bind mount that can carry a different owner than this
   // container's process (Docker Desktop / WSL2 present host-owned entries with
   // an inconsistent uid), and git refuses any of its commands with "detected
@@ -33,7 +33,40 @@ async function git(args, cwd) {
   return execFileAsync('git', ['-c', `safe.directory=${cwd}`, ...args], {
     cwd,
     maxBuffer: 16 * 1024 * 1024,
+    ...(env ? { env: { ...process.env, ...env } } : {}),
   });
+}
+
+/**
+ * The commit a curation branch starts from: the LIVE wiki, not HEAD.
+ *
+ * On juno HEAD had stayed at an August commit (49 pages) while the wiki held
+ * 184: the Redactor read the live corpus through MCP but wrote in a branch of
+ * the old tree, and its diff described a wiki nobody had. When wiki/ differs
+ * from HEAD, the branch starts from a snapshot commit built with a TEMPORARY
+ * index — the workspace's branch, index and HEAD never move — so the proposal's
+ * diff (taken inside the worktree, against its own HEAD) holds only the
+ * curation's corrections.
+ */
+async function curationBase(workspaceRoot, scratchDir) {
+  const { stdout: dirty } = await git(['status', '--porcelain', '-uall', '--', 'wiki'], workspaceRoot);
+  const changed = dirty.split('\n').filter((line) => line.trim()).length;
+  if (changed === 0) return { ref: 'HEAD', snapshot: false, changed: 0 };
+  const indexFile = join(scratchDir, `.snapshot-${process.pid}-${Date.now()}.index`);
+  const env = {
+    GIT_INDEX_FILE: indexFile,
+    GIT_AUTHOR_NAME: 'wiki-agentic-gateway', GIT_AUTHOR_EMAIL: 'gateway@localhost',
+    GIT_COMMITTER_NAME: 'wiki-agentic-gateway', GIT_COMMITTER_EMAIL: 'gateway@localhost',
+  };
+  try {
+    await git(['read-tree', 'HEAD'], workspaceRoot, env);
+    await git(['add', '-A', '--', 'wiki'], workspaceRoot, env);
+    const tree = (await git(['write-tree'], workspaceRoot, env)).stdout.trim();
+    const commit = (await git(['commit-tree', tree, '-p', 'HEAD', '-m', 'agent: snapshot of the live wiki for a curation branch'], workspaceRoot, env)).stdout.trim();
+    return { ref: commit, snapshot: true, changed };
+  } finally {
+    await rm(indexFile, { force: true }).catch(() => {});
+  }
 }
 
 function branchNameFor(runId) {
@@ -73,14 +106,16 @@ export async function createWorktree({ workspaceRoot, runId }) {
     }
   }
   await mkdir(dirname(worktreePath), { recursive: true });
+  let base;
   try {
-    await git(['worktree', 'add', '-b', branch, worktreePath, 'HEAD'], workspaceRoot);
+    base = await curationBase(workspaceRoot, dirname(worktreePath));
+    await git(['worktree', 'add', '-b', branch, worktreePath, base.ref], workspaceRoot);
   } catch (error) {
     throw new WorktreeUnavailableError(
       `could not create the worktree for run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return { path: worktreePath, branch };
+  return { path: worktreePath, branch, base: { snapshot: base.snapshot, changed: base.changed } };
 }
 
 export async function worktreeChanges({ worktreePath }) {

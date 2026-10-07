@@ -786,6 +786,11 @@ export function createAgentRunner({
           })
         : null;
       const worktreeState = runWorktree;
+      // Said once: the branch is the live wiki, not the last history commit.
+      if (runWorktree?.base?.snapshot) onEvent?.({
+        type: 'notice', topic: 'worktree.live-snapshot',
+        detail: `the workspace history is behind its wiki (${runWorktree.base.changed} file(s) not committed); the curation branch starts from the live wiki, the history itself is left untouched`,
+      });
 
       const worktreeToolNames = worktreeState ? GATEWAY_WORKTREE_TOOL_NAMES : [];
       const mcpToolNames = tools.map((entry) => String(entry?.name ?? '')).filter(Boolean);

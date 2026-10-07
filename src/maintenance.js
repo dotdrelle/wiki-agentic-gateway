@@ -25,6 +25,21 @@ export function maintenanceTools(authority,{signal,fetchImpl=fetch,onEvent}={}) 
     const response=await fetchImpl(new URL('/maintenance/bridge',endpoint),{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${authority.token}`},body:JSON.stringify({cycleId:authority.cycleId,command,...args}),signal:requestSignal});
     const data=await response.json();if(!response.ok)throw new Error(data.error??'maintenance_authority_unavailable');return data;
   }
+  // An action is started on a ticket and polled: holding one request for a
+  // whole ingest outlived fetch's header timeout ("fetch failed") while the
+  // job went on. A manager without tickets answers the result directly.
+  async function runAction(args) {
+    const started=await bridge('action',{...args,async:true});
+    if(!started.ticket)return started;
+    for(let polls=0;;polls++){
+      await new Promise((resolve,reject)=>{if(signal?.aborted)return reject(signal.reason??new Error('aborted'));const onAbort=()=>{clearTimeout(timer);reject(signal.reason??new Error('aborted'));};const timer=setTimeout(()=>{signal?.removeEventListener('abort',onAbort);resolve();},Math.min(10_000,1000*1.5**polls));signal?.addEventListener('abort',onAbort,{once:true});});
+      const state=await bridge('action_status',{ticket:started.ticket});
+      if(state.status==='running')continue;
+      if(state.status==='failed')throw new Error(state.error||'maintenance_action_failed');
+      if(state.status==='unknown_ticket')throw new Error('maintenance_action_unknown: the manager no longer follows this action (restarted?); the next scan follows the job');
+      return state.result??state;
+    }
+  }
   const tools=[tool(async()=>{
     const state=await bridge('state');
     return JSON.stringify({policy:state.policy,paused:state.paused,candidates:state.candidates,requests:state.requests.map((r)=>({id:r.id,status:r.status,summary:r.candidate?.summary}))});
@@ -37,22 +52,22 @@ export function maintenanceTools(authority,{signal,fetchImpl=fetch,onEvent}={}) 
     tools.push(tool(async(args)=>{
       invoked.push(action);
       onEvent?.({type:'maintenance_action',action,target:args.target});
-      const result=await bridge('action',{action,...args});
+      const result=await runAction({action,...args});
       onEvent?.({type:'maintenance_result',action,target:args.target,status:result.status});
       return JSON.stringify(result).slice(0,12000);
     },{name:'maintenance_'+action,description:`Perform only the current ${action} candidate. Manager checks policy, exact human decision, resource priority and reserved budget. Waits for final job result. Never polls the model.`,schema}));
   }
-  return {tools,bridge,invoked,onModelCall:async()=>{const call=randomUUID();await bridge('model',{call});return ()=>bridge('model_done',{call},undefined);}};
+  return {tools,bridge,runAction,invoked,onModelCall:async()=>{const call=randomUUID();await bridge('model',{call});return ()=>bridge('model_done',{call},undefined);}};
 }
 export function createMaintenanceRunner({model,authority,signal,onEvent,runId,chatModelOverride,fetchImpl}) {
-  const {tools,bridge,invoked,onModelCall}=maintenanceTools(authority,{signal,onEvent,fetchImpl});
+  const {tools,bridge,runAction,invoked,onModelCall}=maintenanceTools(authority,{signal,onEvent,fetchImpl});
   async function deterministicPass(work,previous) {
     onEvent?.({type:'degraded',capability:'maintenance-decision',cause:'the model made no decision twice',fallback:'due actions run in the canonical order, each re-validated by the manager'});
     const lines=[];
     for(const action of DETERMINISTIC_ORDER) {
       for(const c of work.filter((item)=>item.action===action)) {
         if(signal?.aborted)break;
-        try{const r=await bridge('action',{action:c.action,target:c.target,...(c.operation?{operation:c.operation}:{})});lines.push(`- ${c.summary}: ${r.status??'done'}`);}
+        try{const r=await runAction({action:c.action,target:c.target,...(c.operation?{operation:c.operation}:{})});lines.push(`- ${c.summary}: ${r.status??'done'}`);}
         catch(error){lines.push(`- ${c.summary}: not done (${error.message})`);}
       }
     }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
@@ -254,4 +254,34 @@ test('the confined backend refuses reads that follow a symlink out of the worktr
   writeFileSync(join(root, 'wiki', 'a.md'), '# A\n');
   const read = await backend.read('/wiki/a.md');
   assert.match(String(typeof read === 'string' ? read : (read?.content ?? '')), /# A/);
+});
+
+test('a curation branch starts from the live wiki when the history is behind, and leaves the history alone', async () => {
+  const root = gitRepo({ 'wiki/concepts/demo/a.md': '# A\nold line\n' });
+  try {
+    // The live wiki moved on without a commit: one page edited, one new.
+    writeFileSync(join(root, 'wiki', 'concepts', 'demo', 'a.md'), '# A\nlive line\n');
+    mkdirSync(join(root, 'wiki', 'sources', 'doc'), { recursive: true });
+    writeFileSync(join(root, 'wiki', 'sources', 'doc', 'fiche.md'), '# Fiche\nfact\n');
+    const headBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root }).toString().trim();
+    const statusBefore = execFileSync('git', ['status', '--porcelain'], { cwd: root }).toString();
+
+    const worktree = await createWorktree({ workspaceRoot: root, runId: 'gateway-live' });
+    assert.deepEqual(worktree.base, { snapshot: true, changed: 2 });
+    assert.match(readFileSync(join(worktree.path, 'wiki', 'concepts', 'demo', 'a.md'), 'utf8'), /live line/);
+    assert.ok(existsSync(join(worktree.path, 'wiki', 'sources', 'doc', 'fiche.md')));
+    assert.deepEqual(await worktreeChanges({ worktreePath: worktree.path }), [], 'the live state is the base, not a change');
+
+    writeFileSync(join(worktree.path, 'wiki', 'sources', 'doc', 'fiche.md'), '# Fiche\nfact [src: raw/ingested/doc.md]\n');
+    const changes = await worktreeChanges({ worktreePath: worktree.path });
+    assert.deepEqual(changes.map((entry) => entry.path), ['wiki/sources/doc/fiche.md'], 'only the curation correction is proposed');
+
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root }).toString().trim(), headBefore, 'HEAD never moves');
+    // .wiki/ (the worktrees' home) is gitignored in a real workspace, not in this fixture.
+    const status = () => execFileSync('git', ['status', '--porcelain'], { cwd: root }).toString().split('\n').filter((line) => !line.startsWith('?? .wiki/')).join('\n');
+    assert.equal(status(), statusBefore.split('\n').filter((line) => !line.startsWith('?? .wiki/')).join('\n'), 'the workspace index is untouched');
+    await removeWorktree({ workspaceRoot: root, worktreePath: worktree.path, branch: worktree.branch });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
