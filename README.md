@@ -84,6 +84,9 @@ own entry — one file, two readers. The model comes per run from the manager,
 and so does the MCP pool (the manager sends it with every run; workspace-scoped
 endpoints are per-run by nature).
 
+Maintenance builds of different templates run in parallel, up to
+`GATEWAY_MAINTENANCE_BUILD_CONCURRENCY` (3) at a time.
+
 Ceilings (all optional, defaults in parentheses): `GATEWAY_RECURSION_LIMIT`
 (200) graph steps — a role that trips it hands over a partial result and only
 fails when it gathered nothing; `GATEWAY_TOKEN_BUDGET` (2 000 000) estimated

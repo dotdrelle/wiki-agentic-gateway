@@ -53,3 +53,16 @@ test('maintenance status and cycle replay read the durable receipt after replay-
     const status=await response.json();assert.equal(status.status,'completed');assert.equal(status.result.content,'finished');
   }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
+test('several templates are built in parallel in one maintenance_build call',async()=>{
+  // Four builds ran one after the other on juno, four minutes for four
+  // deliverables. Different templates hold different locks: they overlap.
+  let running=0,peak=0;const started=[];
+  const {tools}=maintenanceTools(authority,{fetchImpl:async(_url,args)=>{const body=JSON.parse(args.body);if(body.command==='action'){started.push(body.target);running++;peak=Math.max(peak,running);await new Promise(r=>setTimeout(r,20));running--;return Response.json({status:'done',target:body.target});}return Response.json({ok:true});}});
+  const out=JSON.parse(await tools.find(t=>t.name==='maintenance_build').invoke({targets:['templates/a.md','templates/b.md','templates/c.md','templates/d.md']}));
+  assert.deepEqual(out.map(r=>r.target),['templates/a.md','templates/b.md','templates/c.md','templates/d.md']);
+  assert.ok(peak>1,'builds overlap');assert.ok(peak<=3,'bounded by the build concurrency');
+  assert.equal(started.length,4);
+  // One template still works as before.
+  const single=JSON.parse(await tools.find(t=>t.name==='maintenance_build').invoke({target:'templates/e.md'}));
+  assert.equal(single.status,'done');
+});
