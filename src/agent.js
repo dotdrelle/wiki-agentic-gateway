@@ -211,7 +211,7 @@ export function createProcedureReadTool(registry, { role = null, allowedToolName
 // the NEXT call, so a single huge call may overshoot but the loop cannot run
 // away.
 const GATEWAY_RECURSION_LIMIT =
-  Number.parseInt(process.env.GATEWAY_RECURSION_LIMIT ?? '', 10) || 40;
+  Number.parseInt(process.env.GATEWAY_RECURSION_LIMIT ?? '', 10) || 200;
 const GATEWAY_TOKEN_BUDGET =
   Number.parseInt(process.env.GATEWAY_TOKEN_BUDGET ?? '', 10) || 2_000_000;
 // The main thread is the workspace memory, and every run appends to it. The
@@ -346,8 +346,13 @@ export function buildGatewayAgent({
 // done, 7 pages read", never WHICH page or with what arguments. A counter is
 // a fact about progress; an argument is content, and content does not leave
 // the gateway.
-function createEventCallbacks({ onEvent, roleNames, onToolFinished = null }) {
-  const known = new Set(GATEWAY_WORKTREE_TOOL_NAMES);
+//
+// `toolNames` is the run's own pool: the MCP adapter hands the tools over
+// UNPREFIXED (`wiki_read_page`), so the `wiki__` test alone counted none of
+// them — Scout, Analyst and Critique reported `tools: 0, pages: 0` and emitted
+// no tool event while they read the wiki for minutes.
+function createEventCallbacks({ onEvent, roleNames, onToolFinished = null, toolNames = [] }) {
+  const known = new Set([...GATEWAY_WORKTREE_TOOL_NAMES, ...[...toolNames].map(String)]);
   const emitTool = (type, name) => {
     const value = String(name ?? '');
     if (value.startsWith('wiki__') || known.has(value)) {
@@ -891,7 +896,7 @@ export function createAgentRunner({
         // "current phase" would describe none of them.
         const phaseTracker = createPhaseTracker(onEvent);
         const roleCallbacks = onEvent
-          ? createEventCallbacks({ onEvent, roleNames: roleSet, onToolFinished: (name) => phaseTracker.countTool(name) })
+          ? createEventCallbacks({ onEvent, roleNames: roleSet, onToolFinished: (name) => phaseTracker.countTool(name), toolNames: roleAllowed })
           : null;
         onEvent?.({ type: 'subagent_started', subagent: role });
         phaseTracker.start(phase);
@@ -1091,7 +1096,7 @@ export function createAgentRunner({
       // The assembly's own callbacks, on the shared tracker: its tool calls are
       // the assemble phase's, and there is exactly one assembly.
       const assemblyCallbacks = onEvent
-        ? createEventCallbacks({ onEvent, roleNames: roleSet, onToolFinished: (name) => phases.countTool(name) })
+        ? createEventCallbacks({ onEvent, roleNames: roleSet, onToolFinished: (name) => phases.countTool(name), toolNames: tools.map((tool) => tool?.name) })
         : null;
       phases.start('assemble');
       try {

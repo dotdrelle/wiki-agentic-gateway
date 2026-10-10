@@ -85,7 +85,7 @@ and so does the MCP pool (the manager sends it with every run; workspace-scoped
 endpoints are per-run by nature).
 
 Ceilings (all optional, defaults in parentheses): `GATEWAY_RECURSION_LIMIT`
-(40) graph steps — a role that trips it hands over a partial result and only
+(200) graph steps — a role that trips it hands over a partial result and only
 fails when it gathered nothing; `GATEWAY_TOKEN_BUDGET` (2 000 000) estimated
 tokens — a cumulative per-agent/per-run estimate checked before every model
 call, so a whole-corpus curation may need it raised, and crossing it stops the

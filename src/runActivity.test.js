@@ -717,3 +717,47 @@ test('a required role failure aborts the siblings still in flight', async () => 
     await new Promise((resolve) => setTimeout(resolve, 350));
   }
 });
+
+/*
+ The MCP adapter hands the run its tools UNPREFIXED (`wiki_read_page`, its
+ default `prefixToolNameWithServerName: false`). The tool counter only knew the
+ `wiki__` form, so a curation's Scout, Analyst and Critique reported
+ `tools: 0, pages: 0` and emitted no tool event while they read the wiki for
+ minutes. The fake tool here carries the name the adapter really produces.
+*/
+class ReadOnceModel extends BaseChatModel {
+  _llmType() { return 'read-once'; }
+  _combineLLMOutput() { return []; }
+  bindTools() { return this; }
+  async _generate(messages) {
+    const read = messages.some((message) => message?._getType?.() === 'tool' || message?.type === 'tool');
+    const message = read
+      ? new AIMessage('done')
+      : new AIMessage({ content: '', tool_calls: [{ id: 'call-1', name: 'wiki_read_page', args: { path: 'wiki/index.md' } }] });
+    return { generations: [{ message, text: read ? 'done' : '' }], llmOutput: {} };
+  }
+}
+
+test('a role counts the unprefixed MCP tools it really calls', async () => {
+  const events = [];
+  const runner = createAgentRunner({
+    model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+    mcpServers: [],
+    toolsOverride: [tool(async () => 'page', {
+      name: 'wiki_read_page',
+      description: 'read one wiki page',
+      schema: z.object({ path: z.string() }),
+    })],
+    roles: ['scout'],
+    checkpointer: false,
+    runId: 'run-unprefixed',
+    onEvent: (event) => events.push(event),
+    chatModelOverride: new ReadOnceModel({}),
+  });
+  await runner.run({ objective: 'audit', capability: 'agent.review', workspace: 'acme' });
+
+  const discover = events.find((event) => event.type === 'phase_finished' && event.phase === 'discover');
+  assert.equal(discover.tools, 1);
+  assert.equal(discover.pages, 1);
+  assert.ok(events.some((event) => event.type === 'tool_finished' && event.tool === 'wiki_read_page'));
+});

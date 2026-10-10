@@ -51,7 +51,7 @@ workspace is reachable through them — but without the boundary the model is
   producing any proposal. Only an AbortError escapes;
 - `buildGatewayAgent` is the single assembly used by both the runner and the
   contract test, with the backend declared explicitly;
-- ceilings that did not exist: `GATEWAY_RECURSION_LIMIT` (default 40) and
+- ceilings that did not exist: `GATEWAY_RECURSION_LIMIT` (default 200) and
   `GATEWAY_TOKEN_BUDGET` (default 2 000 000). The budget is a **cumulative
   per-agent estimate** — each role run and the assembly gets its own
   accumulator, checked with the harness's counter before every model call, so
