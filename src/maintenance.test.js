@@ -54,7 +54,7 @@ test('maintenance status and cycle replay read the durable receipt after replay-
   }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
 test('several templates are built in parallel in one maintenance_build call',async()=>{
-  // Four builds ran one after the other on juno, four minutes for four
+  // Four builds ran one after the other on lyra, four minutes for four
   // deliverables. Different templates hold different locks: they overlap.
   let running=0,peak=0;const started=[];
   const {tools}=maintenanceTools(authority,{fetchImpl:async(_url,args)=>{const body=JSON.parse(args.body);if(body.command==='action'){started.push(body.target);running++;peak=Math.max(peak,running);await new Promise(r=>setTimeout(r,20));running--;return Response.json({status:'done',target:body.target});}return Response.json({ok:true});}});

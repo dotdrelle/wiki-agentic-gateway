@@ -9,7 +9,7 @@ test('a step-limit error is recognised by name or by message', () => {
 });
 
 test('a role that hit its step limit hands over what it had read, newest first', async () => {
-  // Observed on acpi: the Scout read pages one by one, ran out of steps and,
+  // Observed on atlas: the Scout read pages one by one, ran out of steps and,
   // being required, took the curation down with everything it had found.
   const agent = {
     async getState({ configurable }) {

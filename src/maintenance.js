@@ -8,7 +8,7 @@ export const MAINTENANCE_WIKI_READ_TOOLS=new Set(['wiki_read_page','wiki_read_pa
 const DETERMINISTIC_ORDER=['ingest','index','rebuild','curate','build','deliver'];
 // Builds of different templates hold different locks (`template:<path>` in the
 // manager), so they run side by side: four builds took four minutes one after
-// the other on juno, each waiting on one long model call.
+// the other on lyra, each waiting on one long model call.
 export const MAINTENANCE_BUILD_CONCURRENCY=Math.max(1,Number.parseInt(process.env.GATEWAY_MAINTENANCE_BUILD_CONCURRENCY??'',10)||3);
 async function runBounded(items,limit,worker){
   const results=new Array(items.length);let next=0;

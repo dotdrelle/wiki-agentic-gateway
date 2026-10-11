@@ -917,7 +917,7 @@ export function createAgentRunner({
         } catch (error) {
           // A role that ran out of graph steps has still READ something: its
           // thread holds every tool result until the finally below deletes it.
-          // Observed on acpi: the Scout read pages one by one, hit the limit
+          // Observed on atlas: the Scout read pages one by one, hit the limit
           // after 47 s, and — being required — took the whole curation down
           // with everything it had found. Rescue it as a partial handoff,
           // announced; only a role that gathered nothing still fails.
@@ -1263,7 +1263,7 @@ export function createAgentRunner({
           );
         }
         // A curation that wrote nothing is not a proposal: say so where the
-        // Logs read. Observed on acpi: the Redactor described its corrections
+        // Logs read. Observed on atlas: the Redactor described its corrections
         // in prose, on a branch name it invented, and the run read as a
         // success. The branch itself is left as the other paths leave it.
         // Unless the Redactor wrote nothing ON PURPOSE: every finding was on

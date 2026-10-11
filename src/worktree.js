@@ -40,7 +40,7 @@ async function git(args, cwd, env = null) {
 /**
  * The commit a curation branch starts from: the LIVE wiki, not HEAD.
  *
- * On juno HEAD had stayed at an August commit (49 pages) while the wiki held
+ * On lyra HEAD had stayed at an August commit (49 pages) while the wiki held
  * 184: the Redactor read the live corpus through MCP but wrote in a branch of
  * the old tree, and its diff described a wiki nobody had. When wiki/ differs
  * from HEAD, the branch starts from a snapshot commit built with a TEMPORARY
