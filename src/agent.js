@@ -389,9 +389,9 @@ function createEventCallbacks({ onEvent, roleNames, onToolFinished = null, toolN
 const COLLECTIVE_ORDER = ['scout', 'redteam', 'analyst', 'critique', 'redactor', 'archivist'];
 
 /*
- A declared DEPENDENCY graph, not a list. `scout` and `redteam` are both
- sources of raw material and depend on nothing, so they may run in parallel;
- the others consume what precedes them. The ASSEMBLY always receives handoffs
+ A declared DEPENDENCY graph, not a list. `scout` and `redteam` depend on
+ nothing; `analyst` and `critique` both consume Scout's findings and may
+ overlap. The ASSEMBLY always receives handoffs
  in canonical COLLECTIVE_ORDER, whatever the finish order.
 
  Bounded locally, and SEQUENTIAL by default: `GATEWAY_COLLECTIVE_CONCURRENCY`
@@ -402,7 +402,10 @@ export const COLLECTIVE_ROLE_GRAPH = {
   scout: [],
   redteam: [],
   analyst: ['scout'],
-  critique: ['analyst'],
+  // Both roles can inspect the Scout's bounded source inventory independently;
+  // with concurrency 2, analysis and critique overlap without changing the
+  // Redactor's requirement to receive both findings.
+  critique: ['scout'],
   redactor: ['analyst', 'critique', 'redteam'],
   archivist: ['redactor'],
 };
@@ -510,7 +513,7 @@ export function roleAllowList({ role, mcpToolNames = [], worktreeToolNames = [],
 function handoffSection(label, content) {
   const text = String(content ?? '').trim();
   if (!text) return '';
-  const bounded = text.length > 6000 ? `${text.slice(0, 6000)}\n…[handoff truncated]` : text;
+  const bounded = text.length > 4000 ? `${text.slice(0, 4000)}\n…[handoff truncated]` : text;
   return `\n\n## From ${label}\n${bounded}`;
 }
 
@@ -1071,7 +1074,7 @@ export function createAgentRunner({
             baseInput,
             '',
             '## Collective findings',
-            ...enabledRoles.map((role) => `${role}: ${String(roleOutputs[role] ?? '').slice(0, 8000)}`),
+            ...enabledRoles.map((role) => `${role}: ${String(roleOutputs[role] ?? '').slice(0, 5000)}`),
             '',
             'Assemble the findings into ONE final answer. Any "[objection]" lines produced by the Critique or the Red Team MUST be repeated verbatim under a "## Objections" heading — unresolved objections travel with the diff, they never block it.',
           ].join('\n')

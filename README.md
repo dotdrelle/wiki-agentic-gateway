@@ -74,9 +74,12 @@ contract test in `src/frontier.test.js`. The collective (`subagents: [...]`
 per capability) runs the named roles — Scout, **Red Team**, Analyst, Critique,
 Redactor, Archivist (the Red Team is supported but no packaged runtime declares
 it) — as bounded runs ordered by a declared role graph, sequential by default
-(`GATEWAY_COLLECTIVE_CONCURRENCY` raises it; `scout` and `redteam` may then run
-in parallel, and the first in-flight role failure falls back to sequential with
-a `degraded`), each with a per-role tool allow-list.
+(`GATEWAY_COLLECTIVE_CONCURRENCY` raises it; `scout` and `redteam` may run in
+parallel, and `analyst` and `critique` can overlap after Scout. The first
+in-flight role failure falls back to sequential with a `degraded`), each with a
+per-role tool allow-list. Scout uses the engine's paginated, metadata-only
+`wiki_curation_inventory` for `wiki/sources/` before reading only relevant
+fiches; handoffs and final assembly are bounded to limit repeated context.
 
 There is **no capabilities file of its own**: the gateway mounts the
 manager's `agent-runtimes.json` (read-only) and serves the capabilities of its
