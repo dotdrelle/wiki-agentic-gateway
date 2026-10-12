@@ -3,7 +3,7 @@ import { tool } from 'langchain';
 import { z } from 'zod';
 import { createAgentRunner, gatewayCheckpointer, loadMcpTools } from './agent.js';
 
-export const MAINTENANCE_WIKI_READ_TOOLS=new Set(['wiki_read_page','wiki_read_pages','wiki_search_context','wiki_read_ingested_source','wiki_list_ingested_sources','wiki_list_provenance_locators','wiki_outline','wiki_list_pages','wiki_graph_query','wiki_graph_path','wiki_read_deliverable','wiki_collect_context','wiki_workspace_status']);
+export const MAINTENANCE_WIKI_READ_TOOLS=new Set(['wiki_read_page','wiki_read_pages','wiki_search_context','wiki_read_ingested_source','wiki_list_ingested_sources','wiki_list_provenance_locators','wiki_curation_inventory','wiki_outline','wiki_list_pages','wiki_graph_query','wiki_graph_path','wiki_read_deliverable','wiki_collect_context','wiki_workspace_status']);
 // Canonical order of the deterministic fallback, the same as the prompt's.
 const DETERMINISTIC_ORDER=['ingest','index','rebuild','curate','build','deliver'];
 // Builds of different templates hold different locks (`template:<path>` in the

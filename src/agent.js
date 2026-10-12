@@ -390,8 +390,8 @@ const COLLECTIVE_ORDER = ['scout', 'redteam', 'analyst', 'critique', 'redactor',
 
 /*
  A declared DEPENDENCY graph, not a list. `scout` and `redteam` depend on
- nothing; `analyst` and `critique` both consume Scout's findings and may
- overlap. The ASSEMBLY always receives handoffs
+ nothing and may run in parallel; the Critique contests the Analyst's
+ findings, so it follows it. The ASSEMBLY always receives handoffs
  in canonical COLLECTIVE_ORDER, whatever the finish order.
 
  Bounded locally, and SEQUENTIAL by default: `GATEWAY_COLLECTIVE_CONCURRENCY`
@@ -402,10 +402,10 @@ export const COLLECTIVE_ROLE_GRAPH = {
   scout: [],
   redteam: [],
   analyst: ['scout'],
-  // Both roles can inspect the Scout's bounded source inventory independently;
-  // with concurrency 2, analysis and critique overlap without changing the
-  // Redactor's requirement to receive both findings.
-  critique: ['scout'],
+  // The Critique contests the ANALYSIS: it must receive the Analyst's
+  // findings (and, transitively, the Scout's). Depending on the Scout alone
+  // let a wrong grouping reach the Redactor uncontested.
+  critique: ['analyst'],
   redactor: ['analyst', 'critique', 'redteam'],
   archivist: ['redactor'],
 };

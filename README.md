@@ -75,8 +75,8 @@ per capability) runs the named roles — Scout, **Red Team**, Analyst, Critique,
 Redactor, Archivist (the Red Team is supported but no packaged runtime declares
 it) — as bounded runs ordered by a declared role graph, sequential by default
 (`GATEWAY_COLLECTIVE_CONCURRENCY` raises it; `scout` and `redteam` may run in
-parallel, and `analyst` and `critique` can overlap after Scout. The first
-in-flight role failure falls back to sequential with a `degraded`), each with a
+parallel, while the Critique follows the Analyst whose findings it contests. The
+first in-flight role failure falls back to sequential with a `degraded`), each with a
 per-role tool allow-list. Scout uses the engine's paginated, metadata-only
 `wiki_curation_inventory` for `wiki/sources/` before reading only relevant
 fiches; handoffs and final assembly are bounded to limit repeated context.

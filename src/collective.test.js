@@ -273,6 +273,8 @@ test('the role graph gives each role its transitive handoffs in canonical order'
   assert.deepEqual(COLLECTIVE_ROLE_GRAPH.redteam, [], 'the red team depends on nothing: it reads raw material');
   assert.deepEqual(dependencyRoles('scout', ['scout', 'redteam', 'analyst']), []);
   assert.deepEqual(dependencyRoles('analyst', ['scout', 'redteam', 'analyst']), ['scout']);
+  // The Critique contests the analysis: it must receive the Analyst's findings.
+  assert.deepEqual(dependencyRoles('critique', ['scout', 'analyst', 'critique']), ['scout', 'analyst']);
   // Canonical order, not finish order: redteam sorts before analyst.
   assert.deepEqual(
     dependencyRoles('redactor', ['scout', 'redteam', 'analyst', 'critique', 'redactor']),

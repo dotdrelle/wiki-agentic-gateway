@@ -127,8 +127,8 @@ run.
 
 The roles are scheduled by a declared GRAPH, not a list
 (`COLLECTIVE_ROLE_GRAPH`): `scout` and `redteam` depend on nothing and may run
-in parallel; `analyst` and `critique` both depend on `scout` and may overlap,
-`redactor`
+in parallel; `analyst` depends on `scout`, `critique` on `analyst` (it contests
+the analysis, so it must receive it), `redactor`
 on `analyst`/`critique`/`redteam`, `archivist` on `redactor`. Each role's input
 is its TRANSITIVE dependencies' outputs in canonical order, so a parallel finish
 order cannot reorder the context. `GATEWAY_COLLECTIVE_CONCURRENCY` is **1
