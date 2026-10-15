@@ -253,12 +253,34 @@ test('the metrics route exposes durations and counters, no content', async () =>
   const server = startGateway({
     port: 0,
     config: { version: 'test', capabilities: [{ name: 'agent.review', operations: ['run'] }], authToken: null },
+    createRunner: () => ({ run: async () => 'done' }),
   });
   const port = server.address().port;
   try {
-    const report = await fetch(`http://127.0.0.1:${port}/metrics`).then((response) => response.json());
-    assert.equal(typeof report.runsStarted, 'number');
-    assert.equal(typeof report.phases, 'object');
+    const before = await fetch(`http://127.0.0.1:${port}/metrics`).then((response) => response.json());
+    assert.equal(before.runsStarted, 0);
+    assert.equal(typeof before.phases, 'object');
+    assert.equal(typeof before.roles, 'object');
+    // The run lifecycle is emitted by the server, outside the runner callback:
+    // it must still reach the counters (they read 0 after a real curation).
+    const created = await fetch(`http://127.0.0.1:${port}/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'agent.review',
+        operation: 'run',
+        objective: 'audit',
+        model: { baseUrl: 'http://127.0.0.1:9/v1', model: 'openai/gpt-test', apiKey: 'k' },
+      }),
+    }).then((response) => response.json());
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const status = await fetch(`http://127.0.0.1:${port}/runs/${created.runId}`).then((response) => response.json());
+      if (status.status === 'completed') break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const after = await fetch(`http://127.0.0.1:${port}/metrics`).then((response) => response.json());
+    assert.equal(after.runsStarted, 1);
+    assert.equal(after.runsCompleted, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

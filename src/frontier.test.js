@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
-import { AIMessage, tool } from 'langchain';
+import { AIMessage, ToolMessage, tool } from 'langchain';
 import { z } from 'zod';
 import { COLLECTIVE_ROLE_NAMES } from './collective.js';
 import {
@@ -10,6 +10,7 @@ import {
   ROLE_TOOL_POLICY,
   buildGatewayAgent,
   createGatewayBoundaryMiddleware,
+  createRoleMeter,
   roleAllowList,
   resolveMemoryScope,
 } from './agent.js';
@@ -107,6 +108,31 @@ test('the boundary enforces the token budget before the next model call', async 
     boundary.wrapModelCall({ tools: [], messages: [longMessage] }, async (request) => request),
     /token budget exceeded/,
   );
+});
+
+test('a budget overrun names the role and what it spent, never a path', async () => {
+  const meter = createRoleMeter();
+  const boundary = createGatewayBoundaryMiddleware({ allowedToolNames: ['wiki_read_pages'], tokenBudget: 150, label: 'scout', meter });
+  const read = (args) => boundary.wrapToolCall(
+    { toolCall: { name: 'wiki_read_pages', id: 't', args } },
+    async () => new ToolMessage({ content: 'pages', name: 'wiki_read_pages', tool_call_id: 't' }),
+  );
+  await boundary.wrapModelCall({ tools: [], messages: [{ role: 'user', content: 'x'.repeat(200) }] }, async (request) => request);
+  await read({ paths: ['wiki/sources/a.md', 'wiki/sources/b.md'] });
+  await read({ paths: ['wiki/sources/b.md', 'wiki/sources/c.md'] });
+  // A failed read is not a page read.
+  await boundary.wrapToolCall(
+    { toolCall: { name: 'wiki_read_pages', id: 'u', args: { paths: ['wiki/sources/missing.md'] } } },
+    async () => new ToolMessage({ content: 'Page not found', name: 'wiki_read_pages', tool_call_id: 'u', status: 'error' }),
+  );
+  assert.deepEqual(meter.snapshot(), { modelCalls: 1, tokensEstimated: meter.snapshot().tokensEstimated, maxCallTokens: meter.snapshot().tokensEstimated, distinctPages: 3, rereads: 1 });
+  const error = await boundary.wrapModelCall({ tools: [], messages: [{ role: 'user', content: 'y'.repeat(800) }] }, async (request) => request)
+    .then(() => null, (failure) => failure);
+  assert.equal(error?.name, 'TokenBudgetExceededError');
+  assert.match(error.message, /in role "scout"/);
+  assert.match(error.message, /after 2 model call\(s\), 3 distinct page\(s\) read, 1 re-read\(s\), largest call \d+ tokens/);
+  assert.doesNotMatch(error.message, /wiki\/sources/);
+  assert.equal(error.meter.modelCalls, 2);
 });
 
 // ── Memory scope (lot 1) ─────────────────────────────────────────────────────

@@ -233,6 +233,13 @@ test('phases open and close in order, and count the tools they used', async () =
     .filter((event) => event.type === 'phase_started' || event.type === 'phase_finished')
     .map((event) => `${event.type === 'phase_started' ? '>' : '<'}${event.phase}`);
   assert.deepEqual(phases, ['>discover', '<discover', '>analyse', '<analyse', '>assemble', '<assemble']);
+  // Each finished phase says what its agent spent, assembly included.
+  for (const finished of events.filter((event) => event.type === 'phase_finished')) {
+    assert.ok(finished.modelCalls >= 1, `${finished.phase} counts its model calls`);
+    assert.ok(finished.tokensEstimated > 0 && finished.maxCallTokens > 0 && finished.maxCallTokens <= finished.tokensEstimated);
+    assert.equal(typeof finished.distinctPages, 'number');
+    assert.equal(typeof finished.rereads, 'number');
+  }
 });
 
 test('progress is coalesced: one frame per window, not one per tool', () => {
@@ -585,23 +592,30 @@ test('eviction removes every thread of the scope, including actor and role keys'
   }
 });
 
-// A model that holds scout and redteam at a barrier until BOTH have started:
-// under a sequential scheduler the first one would wait for a partner that
-// never arrives, so the barrier is itself the proof of parallelism.
+// A model that holds the Red Team and the Analyst at a barrier until BOTH have
+// started: under a sequential scheduler the first one would wait for a partner
+// that never arrives, so the barrier is itself the proof of parallelism. Both
+// follow the Scout, which answers at once with one conclusion and one
+// candidate line.
 class BarrierModel extends BaseChatModel {
-  constructor(timeline, gate, release) {
+  constructor(timeline, gate, release, inputs) {
     super({});
     this.timeline = timeline;
     this.gate = gate;
     this.release = release;
+    this.inputs = inputs;
   }
   _llmType() { return 'barrier'; }
   _combineLLMOutput() { return []; }
   bindTools() { return this; }
   async _generate(messages) {
     const text = messages.map((message) => String(message?.content ?? '')).join('\n');
-    const role = ['scout', 'redteam'].find((name) => text.includes(`Your task as the ${name}`));
+    if (text.includes('Your task as the scout')) {
+      return { generations: [{ message: new AIMessage('SCOUT-CONCLUSION: b.md is obsolete\n[candidate] wiki/sources/a.md; wiki/sources/b.md — shared tag'), text: '' }], llmOutput: {} };
+    }
+    const role = ['redteam', 'analyst'].find((name) => text.includes(`Your task as the ${name}`));
     if (role) {
+      this.inputs[role] = text;
       this.timeline.push(`start:${role}`);
       if (this.timeline.filter((entry) => entry.startsWith('start:')).length === 2) this.release();
       await Promise.race([this.gate, new Promise((resolve) => setTimeout(resolve, 1000))]);
@@ -612,29 +626,34 @@ class BarrierModel extends BaseChatModel {
   }
 }
 
-test('with concurrency 2, scout and redteam run in parallel', async () => {
+test('with concurrency 2, the Red Team and the Analyst run in parallel after the Scout', async () => {
   const previous = process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
   process.env.GATEWAY_COLLECTIVE_CONCURRENCY = '2';
   try {
     const timeline = [];
+    const inputs = {};
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
     const runner = createAgentRunner({
       model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
       mcpServers: [],
       toolsOverride: [readTool()],
-      roles: ['scout', 'redteam'],
+      roles: ['scout', 'redteam', 'analyst'],
       checkpointer: false,
       runId: 'parallel-1',
-      chatModelOverride: new BarrierModel(timeline, gate, release),
+      chatModelOverride: new BarrierModel(timeline, gate, release, inputs),
     });
 
     await runner.run({ objective: 'audit', capability: 'agent.review', workspace: 'acme' });
     assert.ok(
-      timeline.indexOf('start:redteam') < timeline.indexOf('end:scout'),
+      timeline.indexOf('start:analyst') < timeline.indexOf('end:redteam')
+        && timeline.indexOf('start:redteam') < timeline.indexOf('end:analyst'),
       `both roles must start before either ends — saw ${timeline.join(', ')}`,
     );
-    assert.ok(timeline.indexOf('start:scout') < timeline.indexOf('end:redteam'));
+    // Same cases, independent eyes: the Red Team gets the candidate line only.
+    assert.match(inputs.redteam, /\[candidate\] wiki\/sources\/a\.md; wiki\/sources\/b\.md — shared tag/);
+    assert.doesNotMatch(inputs.redteam, /SCOUT-CONCLUSION/);
+    assert.match(inputs.analyst, /SCOUT-CONCLUSION/);
   } finally {
     if (previous === undefined) delete process.env.GATEWAY_COLLECTIVE_CONCURRENCY;
     else process.env.GATEWAY_COLLECTIVE_CONCURRENCY = previous;

@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
-import { COLLECTIVE_ROLE_GRAPH, createAgentRunner, dependencyRoles } from './agent.js';
-import { extractObjections, extractRebuildOwned, extractResolutions } from './collective.js';
+import { COLLECTIVE_ROLE_GRAPH, createAgentRunner, dependencyRoles, handoffFor } from './agent.js';
+import { extractCandidates, extractObjections, extractRebuildOwned, extractResolutions } from './collective.js';
 
 // Scripted model: responses are consumed in order, the last one repeats.
 // FakeListChatModel formats responses as TEXT (tool_calls are dropped), so a
@@ -270,8 +270,11 @@ test('the Archivist closes an objection by naming it, and only then', () => {
 
 test('the role graph gives each role its transitive handoffs in canonical order', () => {
   assert.deepEqual(COLLECTIVE_ROLE_GRAPH.scout, []);
-  assert.deepEqual(COLLECTIVE_ROLE_GRAPH.redteam, [], 'the red team depends on nothing: it reads raw material');
+  // The Red Team examines the Scout's candidates (handoffFor withholds the
+  // Scout's conclusions), so it follows the Scout, alongside the Analyst.
+  assert.deepEqual(COLLECTIVE_ROLE_GRAPH.redteam, ['scout']);
   assert.deepEqual(dependencyRoles('scout', ['scout', 'redteam', 'analyst']), []);
+  assert.deepEqual(dependencyRoles('redteam', ['scout', 'redteam', 'analyst']), ['scout']);
   assert.deepEqual(dependencyRoles('analyst', ['scout', 'redteam', 'analyst']), ['scout']);
   // The Critique contests the analysis: it must receive the Analyst's findings.
   assert.deepEqual(dependencyRoles('critique', ['scout', 'analyst', 'critique']), ['scout', 'analyst']);
@@ -286,4 +289,21 @@ test('the role graph gives each role its transitive handoffs in canonical order'
   );
   // A dependency that is not enabled does not block its dependent.
   assert.deepEqual(dependencyRoles('analyst', ['analyst']), []);
+});
+
+test('the Red Team receives the Scout\'s candidate lines, never its conclusions', () => {
+  const scout = [
+    'The two fiches are clearly duplicates and the second is obsolete.',
+    '[candidate] wiki/sources/doc/a.md; wiki/sources/doc/b.md — shared tag hyperviseur',
+    '[candidate] wiki/concepts/fam/x.md — pivot-tag-not-carried (rebuild)',
+  ].join('\n');
+  const handed = handoffFor('redteam', 'scout', scout);
+  assert.match(handed, /\[candidate\] wiki\/sources\/doc\/a\.md; wiki\/sources\/doc\/b\.md — shared tag hyperviseur/);
+  assert.match(handed, /\[candidate\] wiki\/concepts\/fam\/x\.md/);
+  assert.doesNotMatch(handed, /clearly duplicates|obsolete/);
+  // No candidate line: the Red Team is pointed at the engine, not left blind.
+  assert.match(handoffFor('redteam', 'scout', 'only prose'), /candidates" view of wiki_curation_inventory/);
+  // Every other role keeps the full handoff.
+  assert.equal(handoffFor('analyst', 'scout', scout), scout);
+  assert.deepEqual(extractCandidates('[candidate]\n[candidate] a.md — x'), ['[candidate] a.md — x']);
 });

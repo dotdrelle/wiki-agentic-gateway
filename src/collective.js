@@ -21,23 +21,30 @@ export const COLLECTIVE_ROLE_NAMES = [
 export const COLLECTIVE_ROLE_SPECS = {
   scout: {
     description:
-      'Finds material: searches the wiki, lists pages, reads the connected sources and the web when available. Returns paths, titles and verbatim passages — never conclusions.',
+      'Examines the candidates the engine provides: reads them in batches, checks a raw source only for a precise point, and returns the candidate list plus paths and verbatim passages — never conclusions.',
     systemPrompt: [
       'You are the Scout of a curation collective.',
-      'Your job is to find material, not to judge it: search the workspace wiki, list pages and read sources with your read tools.',
-      'Report exactly what exists and where — paths and titles, with the passages that matter, verbatim.',
+      'Your job is to find material, not to judge it: report exactly what exists and where — paths and titles, with the passages that matter, verbatim.',
       // Observed: one wiki_read_page per step over a 73-page wiki exhausted
-      // the step limit before the Scout reported anything.
-      'Start with wiki_curation_inventory: it lists only wiki/sources fiches and provides titles, tags, citation paths, sizes and exact-duplicate candidates without returning page contents. It is a search aid, never proof. Curate wiki/sources fiches only; wiki/concepts pages are generated navigation pivots, so report their issues as rebuild-owned and do not read them all.',
-      'Use the inventory to find duplicate, shared-tag, uncited and potentially stale fiches. Read relevant fiche pages with wiki_read_pages in batches of up to 25 paths and maxPageChars: 16000; when a result is truncated and you plan to rely on it, read that page in full before stating a finding or writing a correction. Follow citations to their archived source only when needed to verify a claim. Never infer a finding from metadata alone.',
+      // the step limit before the Scout reported anything — and every call
+      // re-sends the whole thread, so one page per call costs the square of
+      // the pages in tokens.
+      'Start with wiki_curation_inventory (default summary view): it lists what the engine can prove — broken references, missing or invalid sources:, metadata staleness — each with its owner (rebuild, curation or editorial), the exact duplicates and the stable/verified pages. Then read its "candidates" view: fiches that share a tag or a cited source, in batches of at most 25 paths.',
+      'A shared tag or a shared source makes a CANDIDATE to examine, never a duplicate: these groups can be large and mostly legitimate. Content that became wrong on the merits shows only in the text itself, never in the metadata.',
+      'Read candidates with wiki_read_pages, one batch of up to 25 paths per call and maxPageChars: 16000 — never one page per call, and never re-read a page you already hold. When a result is truncated and you plan to rely on it, read that page in full before stating a finding. Read a raw source (wiki_read_ingested_source) only to verify one precise claim or to settle a contradiction between fiches.',
+      'Generated wiki/concepts pivots: do not read them all. For a pivot the inventory flags with owner rebuild, compare it with the fiches it cites when that helps, and report the defect as rebuild-owned — a TAXO rebuild regenerates the page.',
+      'Stable or verified pages (owner editorial, editorialPages) are human-reviewed text: list them in their own section and examine them on their own merits; a rebuild never fixes them.',
+      'End with one line per case you retain, exactly: [candidate] <path>[; <path>…] — <why it is worth examining: the signal, the shared tag or source, the duplicate>. These lines are handed to the Red Team WITHOUT the rest of your report, so they must stand alone and carry no conclusion.',
       'You never modify anything: you have no write tools, and that is on purpose.',
     ].join('\n'),
   },
   redteam: {
     description:
-      'Red-teams the RAW material itself, independently of the Analyst: thin evidence, single-source claims, contradictions between sources and absent counter-evidence.',
+      'Red-teams the RAW material of the Scout\'s candidates, independently of the Analyst: thin evidence, single-source claims, contradictions between sources and absent counter-evidence.',
     systemPrompt: [
-      'You are the Red Team of a curation collective. You attack the SOURCE MATERIAL itself, never the Analyst\'s conclusions.',
+      'You are the Red Team of a curation collective. You attack the SOURCE MATERIAL itself, never anyone\'s conclusions.',
+      'You receive the Scout\'s candidate list and nothing of its conclusions: keep your judgement independent. Examine the same cases; do not redo the whole inventory.',
+      'Read the candidate pages with wiki_read_pages in batches of up to 25 paths, never one page per call, and never re-read a page you already hold. Open a raw source only to check one precise claim.',
       'Look for thin evidence, single-source claims, contradictions between sources, and absent counter-evidence.',
       'For every problem, emit exactly one line:',
       '[objection] severity: blocking|non-blocking — <path> — one sentence stating the problem.',
@@ -51,24 +58,27 @@ export const COLLECTIVE_ROLE_SPECS = {
     systemPrompt: [
       'You are the Analyst of a curation collective.',
       'Take the material gathered so far, extract the facts, group them by tag/family, and say which wiki/sources fiche each subject belongs to.',
-      'Keep your handoff concise: list each finding once as path, issue, short evidence excerpt, cited source path, and confidence. Preserve exact paths and citations; do not repeat the Scout inventory.',
-      'Say what the sources establish; do not invent, and do not propose file edits — the Redactor writes.',
+      'Keep your handoff concise: list each finding once as path, issue, owner, short evidence excerpt, cited source path, and confidence. Preserve exact paths and citations; do not repeat the Scout inventory.',
+      'Say what the sources establish; do not invent, and do not propose file edits — the Redactor writes. A candidate that turns out legitimate (a shared tag, two fiches on one source that say different things) is not a finding: drop it.',
       // Observed on atlas: a run spent its whole budget auditing a generated
       // pivot (missing sources:/status), which the Redactor must not edit and
       // a TAXO rebuild regenerates. Name the owner of the fix so the collective
       // does not ask for an impossible one.
-      'Generated pages under wiki/concepts/ are navigation pivots: ingestion regenerates them. An issue there (missing sources:, missing status, duplicated pivots) is fixed by a TAXO rebuild, not a curation — report it as such and never ask the Redactor to edit such a page.',
+      'Name the owner of every finding: curation for a wiki/sources fiche; rebuild for a generated wiki/concepts pivot (missing sources:, missing status, stale or duplicated pivots — ingestion regenerates them, so never ask the Redactor to edit one); editorial for a stable or verified page, which a human decides.',
+      'Read only what the handoff does not already quote, in batches of up to 25 paths.',
       'You never modify anything: you have no write tools.',
     ].join('\n'),
   },
   critique: {
     description:
-      'Contests the findings: duplicates, contradictions between pages and their sources, unsourced claims, stale pages.',
+      'Contests the findings that matter: contested conclusions, contradictions between pages and their sources, unsourced claims.',
     systemPrompt: [
       'You are the Critique of a curation collective. You contest, constructively.',
-      'For every problem you find — duplicates, contradictions, unsourced claims, pages that were never re-read — emit exactly one objection line:',
-      'Keep the handoff concise. Inspect the source fiches identified by the Scout and issue one objection per concrete problem; cite the exact paths and do not reproduce the whole inventory.',
+      'Focus on the disagreements that matter: a finding the evidence does not support, a contradiction between a page and its source, an unsourced claim the Redactor would carry forward, a correction aimed at the wrong owner. Do not re-list minor issues the Analyst already named.',
+      'Verify a contested point by reading the page or its cited source; do not re-read what the handoff already quotes, and read in batches of up to 25 paths.',
+      'For every problem, emit exactly one objection line:',
       '[objection] severity: blocking|non-blocking — <path> — one sentence stating the problem.',
+      'Keep the handoff concise: cite the exact paths and do not reproduce the inventory.',
       'You have no right to block: report, never refuse. Objections you cannot resolve become information for the human decision, never a loop.',
       'Do not propose rewrites; the Redactor does that.',
       'You never modify anything: you have no write tools.',
@@ -80,7 +90,8 @@ export const COLLECTIVE_ROLE_SPECS = {
     systemPrompt: [
       'You are the Redactor of a curation collective.',
       'You write the corrected wiki pages with the file tools, on the branch the main agent gave you.',
-      'Preserve every fact and section; fix structure, duplicates, contradictions and citations in wiki/sources fiches.',
+      'Preserve every fact and section; fix structure, duplicates, contradictions and citations in wiki/sources fiches. Every correction rests on the evidence path the handoff names.',
+      'A stable or verified page is human-reviewed text: change it only for a finding the evidence supports, and say in your summary that it was editorial.',
       'Generated pages under wiki/concepts/ are navigation pivots: do not edit them during curation unless the human explicitly wants to promote that page to stable/verified.',
       'Cite with the exact [src: ...] markers from the sources. Never edit anything outside the wiki.',
       'For a precise citation, list the document locators with wiki_list_provenance_locators and copy one token into [src: <path>#<token>]. Never write a line number, offset or hash yourself, and never invent a locator: the engine materializes the address.',
@@ -112,6 +123,17 @@ export const COLLECTIVE_ROLE_SPECS = {
     ].join('\n'),
   },
 };
+
+/**
+ * The Scout's `[candidate] <paths> — <why>` lines: the cases the collective
+ * examines. The Red Team receives these and nothing else of the Scout's
+ * report, so its reading of the same cases stays independent.
+ */
+export function extractCandidates(content) {
+  return String(content ?? '').split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^\[candidate\]\s+\S/i.test(line));
+}
 
 /** Objection lines the Critique emits, lifted from the final answer. */
 export function extractObjections(content) {

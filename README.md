@@ -15,7 +15,7 @@ GET  /runs/:id          → { runId, status, result? }    (result may carry work
 POST /runs/:id/cancel   → { ok }
 POST /runs/:id/approve  → { ok }                        (HITL decision)
 GET  /runs/:id/proposal → { runId, proposal }           (worktree runs)
-GET  /metrics           → content-free phase metrics (bounded sliding window)
+GET  /metrics           → content-free phase and role metrics (bounded sliding window)
 GET  /procedures        → available / shadowed / malformed procedures
 GET  /runs/:id/events   → SSE `data: {json}\n\n`, replay then live (stream_epoch, run_*, approval_required, message, tool_*, subagent_*, phase_*, progress, finding, degraded, notice; the heartbeat stays ephemeral)
 ```
@@ -74,12 +74,20 @@ contract test in `src/frontier.test.js`. The collective (`subagents: [...]`
 per capability) runs the named roles — Scout, **Red Team**, Analyst, Critique,
 Redactor, Archivist (the Red Team is supported but no packaged runtime declares
 it) — as bounded runs ordered by a declared role graph, sequential by default
-(`GATEWAY_COLLECTIVE_CONCURRENCY` raises it; `scout` and `redteam` may run in
-parallel, while the Critique follows the Analyst whose findings it contests. The
-first in-flight role failure falls back to sequential with a `degraded`), each with a
-per-role tool allow-list. Scout uses the engine's paginated, metadata-only
-`wiki_curation_inventory` for `wiki/sources/` before reading only relevant
-fiches; handoffs and final assembly are bounded to limit repeated context.
+(`GATEWAY_COLLECTIVE_CONCURRENCY` raises it; after the Scout, the Red Team and
+the Analyst may run in parallel — the Red Team receives the Scout's candidate
+list without its conclusions — while the Critique follows the Analyst whose
+findings it contests. The first in-flight role failure falls back to sequential
+with a `degraded`), each with a per-role tool allow-list. The Scout starts from
+the engine's metadata-only `wiki_curation_inventory` — deterministic defects
+with their owner (rebuild, curation, editorial), exact duplicates, then
+candidate groups sharing a tag or source — and reads them in batches of at most
+25 pages, opening a raw source only to verify one point; handoffs and final
+assembly are bounded to limit repeated context. Each finished phase reports what
+its agent spent (model calls, estimated tokens, largest call, distinct pages,
+re-reads), in `phase_finished` and `GET /metrics`. The events carry both the
+workflow phase and role; `/metrics` keeps the compatible phase aggregates and
+also separates roles, including the Archivist from final assembly.
 
 There is **no capabilities file of its own**: the gateway mounts the
 manager's `agent-runtimes.json` (read-only) and serves the capabilities of its
@@ -93,9 +101,9 @@ Maintenance builds of different templates run in parallel, up to
 Ceilings (all optional, defaults in parentheses): `GATEWAY_RECURSION_LIMIT`
 (200) graph steps — a role that trips it hands over a partial result and only
 fails when it gathered nothing; `GATEWAY_TOKEN_BUDGET` (2 000 000) estimated
-tokens — a cumulative per-agent/per-run estimate checked before every model
-call, so a whole-corpus curation may need it raised, and crossing it stops the
-run before the next call with the reason announced; `GATEWAY_WORKTREE_MAX_FILES`
+tokens — a cumulative per-agent estimate checked before every model call, so a
+whole-corpus curation may need it raised, and crossing it stops that agent
+before its next call, the message naming the role and its counters; `GATEWAY_WORKTREE_MAX_FILES`
 (40) / `GATEWAY_WORKTREE_MAX_DIFF_CHARS` (300 000) — beyond them the run fails
 loudly and discards the branch. Memory: `GATEWAY_MEMORY_MAX_CHECKPOINTS` (200)
 and `GATEWAY_MEMORY_MAX_THREAD_CHARS` (400 000) rotate the workspace thread

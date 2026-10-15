@@ -57,7 +57,11 @@ workspace is reachable through them — but without the boundary the model is
   accumulator, checked with the harness's counter before every model call, so
   it is not a shared run-wide cap and a whole-corpus curation may need it
   raised. Crossing it stops that agent before its next call and is announced
-  (`degraded role:<role>`, or a run failure for a required role/assembly).
+  (`degraded role:<role>`, or a run failure for a required role/assembly); the
+  message names the role and its meter (`createRoleMeter`: model calls,
+  estimated tokens, largest call, distinct pages read, re-reads). Every call
+  re-sends the thread, so the sum grows with the square of the calls — why the
+  roles read in batches of up to 25 pages.
   A role that trips the recursion limit hands over a partial result and only
   fails when it gathered nothing. The 600s task timeout stays.
 
@@ -126,9 +130,12 @@ finding is rebuild-owned it writes nothing and says so), **Archivist** (learned
 run.
 
 The roles are scheduled by a declared GRAPH, not a list
-(`COLLECTIVE_ROLE_GRAPH`): `scout` and `redteam` depend on nothing and may run
-in parallel; `analyst` depends on `scout`, `critique` on `analyst` (it contests
-the analysis, so it must receive it), `redactor`
+(`COLLECTIVE_ROLE_GRAPH`): `scout` depends on nothing; `redteam` and `analyst`
+both depend on `scout` and may run in parallel — the Red Team receives only the
+Scout's `[candidate]` lines (`HANDOFF_VIEWS` / `handoffFor`), never its
+conclusions, so it examines the same cases with independent eyes;
+`critique` depends on `analyst` (it contests the analysis, so it must receive
+it), `redactor`
 on `analyst`/`critique`/`redteam`, `archivist` on `redactor`. Each role's input
 is its TRANSITIVE dependencies' outputs in canonical order, so a parallel finish
 order cannot reorder the context. `GATEWAY_COLLECTIVE_CONCURRENCY` is **1
@@ -168,9 +175,16 @@ re-evaluate — the role specs and the event vocabulary stay unchanged.
 
 ## Metrics
 
-`GET /metrics` returns local, content-free phase metrics: per-phase p50 / p95 /
-avg duration plus tool and page counts, and run / heartbeat / degraded counters.
-`phase_finished` carries `durationMs` (a fact, never content). Each phase keeps
+`GET /metrics` returns local, content-free phase and role metrics: p50 / p95 /
+avg duration plus tool and page counts, the role meter's sums (`modelCalls`,
+`tokensEstimated`, `distinctPages`, `rereads`) and its `maxCallTokens` maximum,
+and run / heartbeat / degraded counters. `phase_started` and `phase_finished`
+carry both `phase` and `role`; `/metrics.phases` preserves workflow aggregates
+while `/metrics.roles` separates agents that share a phase, such as the
+Archivist and final assembly. Lifecycle and heartbeat counters are recorded at
+the gateway's event-emission boundary. `phase_finished` carries `durationMs`
+and the same meter counters — counts only: the read paths stay inside the
+meter to tell a re-read from a first read and are never emitted. Each phase keeps
 a BOUNDED sliding window of the last `GATEWAY_METRICS_WINDOW` durations (default
 500), so the accumulator has a ceiling like every other one in the repo. This is
 the measurement the lot 6 gate reads — "p95 improves without losing objections"

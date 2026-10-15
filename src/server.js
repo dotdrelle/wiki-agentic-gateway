@@ -74,6 +74,10 @@ export function startGateway({
   const EPHEMERAL_EVENT_TYPES = new Set(['heartbeat']);
 
   function emit(run, event) {
+    // Count every gateway event at the single emission boundary. Run lifecycle
+    // and heartbeat events are emitted here (outside the runner callback), so
+    // recording only in the runner callback left those counters permanently 0.
+    metrics.record(event);
     const stamped = {
       ...event,
       runId: run.runId,
@@ -143,7 +147,6 @@ export function startGateway({
       mcpServers: request.mcp ?? [],
       signal: run.controller.signal,
       onEvent: (event) => {
-        metrics.record(event);
         emit(run, event);
       },
       // The hands follow the served capability declaration, never the request:
