@@ -65,7 +65,10 @@ export function maintenanceTools(authority,{signal,fetchImpl=fetch,onEvent}={}) 
     const one=async(args)=>{
       invoked.push(action);
       onEvent?.({type:'maintenance_action',action,target:args.target});
-      const result=await runAction({action,...args});
+      let result;
+      // A refused or failed action is a result too: without this event the
+      // gateway console and journal showed the call and never its outcome.
+      try{result=await runAction({action,...args});}catch(error){onEvent?.({type:'maintenance_result',action,target:args.target,status:'failed',error:error instanceof Error?error.message:String(error)});throw error;}
       onEvent?.({type:'maintenance_result',action,target:args.target,status:result.status});
       return result;
     };

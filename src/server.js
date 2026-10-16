@@ -5,6 +5,7 @@ import { createAgentRunner } from './agent.js';
 import { pruneStaleWorktrees, workspaceRootFor } from './worktree.js';
 import { describeProcedures, loadProcedureRegistry } from './procedures.js';
 import { createPhaseMetrics } from './metrics.js';
+import { createRateLimitedWarn, formatGatewayEvent, gatewayTraceMode } from './trace.js';
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
@@ -73,6 +74,9 @@ export function startGateway({
   */
   const EPHEMERAL_EVENT_TYPES = new Set(['heartbeat']);
 
+  const traceMode = gatewayTraceMode();
+  const warnOnce = createRateLimitedWarn();
+
   function emit(run, event) {
     // Count every gateway event at the single emission boundary. Run lifecycle
     // and heartbeat events are emitted here (outside the runner callback), so
@@ -84,6 +88,8 @@ export function startGateway({
       ts: now().toISOString(),
       sequence: run.sequence++,
     };
+    const traceLine = formatGatewayEvent(stamped, { mode: traceMode, run });
+    if (traceLine) console.log(traceLine);
     if (!EPHEMERAL_EVENT_TYPES.has(String(event?.type))) {
       run.events.push(stamped);
       // What the ceiling drops is remembered, so a cursor older than the
@@ -272,6 +278,12 @@ export function startGateway({
 
   const server = createServer((request, response) => {
     if (!authorized(request, config?.authToken)) {
+      // Say WHY, without the token: a missing header and a different token
+      // call for different fixes (headers in agent-runtimes.json vs a
+      // GATEWAY_AUTH_TOKEN that changed in .env without `agents up`).
+      const reason = request.headers.authorization ? 'bearer token differs from GATEWAY_AUTH_TOKEN' : 'no Authorization header';
+      const path = String(request.url ?? '/').split('?')[0];
+      warnOnce(`401:${reason}:${path}`, `gateway: 401 ${request.method} ${path} — ${reason}`);
       return sendJson(response, 401, { error: 'Unauthorized' });
     }
     const url = new URL(request.url ?? '/', 'http://gateway.local');
@@ -314,6 +326,7 @@ export function startGateway({
         const requested = String(body.capability ?? '').trim();
         const served = (config?.capabilities ?? []).map((capability) => String(capability?.name ?? ''));
         if (!requested || !served.includes(requested)) {
+          console.warn(`${new Date().toISOString()} WARN  gateway: run refused — ${requested ? `capability "${requested}" not served (serving: ${served.join(', ') || 'nothing'}; check agent-runtimes.json)` : 'no capability named'}`);
           return sendJson(response, 400, {
             error: requested
               ? `unknown capability "${requested}": this gateway serves ${served.join(', ') || 'nothing'}`
@@ -340,6 +353,8 @@ export function startGateway({
         const runId = previous?.runId ?? nextRunId();
         const run = {
           runId,
+          capability: requested,
+          workspace: body.workspace?.name ?? body.workspace ?? null,
           ...(requested === 'agent.maintain' ? { maintenance: { cycleId: body.maintenance.cycleId } } : {}),
           status: 'running',
           events: [],
