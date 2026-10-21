@@ -15,6 +15,8 @@ import {
   pruneStaleWorktrees,
   removeWorktree,
   worktreeChanges,
+  parsePorcelainZ,
+  worktreeFileContent,
   worktreeDiff,
   worktreeProposalTooLarge,
 } from './worktree.js';
@@ -284,4 +286,33 @@ test('a curation branch starts from the live wiki when the history is behind, an
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('worktreeChanges keeps an accented or spaced path verbatim (never git-quoted)', async () => {
+  // Observed on juno: "points-d-attention-et-évaluation/risque.md" came back
+  // as "\"wiki/…-et-\\303\\251valuation/risque.md\"", so the merge found no
+  // wiki change and the proposal blocked every build.
+  const accented = 'wiki/concepts/points-d-attention-et-évaluation/risque.md';
+  const spaced = 'wiki/sources/a doc/fiche.md';
+  const root = gitRepo({ [accented]: '# Risque\nold\n', [spaced]: '# Fiche\nold\n' });
+  try {
+    const worktree = await createWorktree({ workspaceRoot: root, runId: 'gateway-accent' });
+    writeFileSync(join(worktree.path, accented), '# Risque\nnew\n');
+    writeFileSync(join(worktree.path, spaced), '# Fiche\nnew\n');
+    const changes = await worktreeChanges({ worktreePath: worktree.path });
+    assert.deepEqual(changes.map((entry) => entry.path).sort(), [accented, spaced].sort());
+    assert.equal(await worktreeFileContent({ worktreePath: worktree.path, relativePath: accented }), '# Risque\nnew\n');
+    await removeWorktree({ workspaceRoot: root, worktreePath: worktree.path, branch: worktree.branch });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parsePorcelainZ skips a rename source and keeps the destination', () => {
+  const out = 'R  wiki/new é.md\0wiki/old.md\0?? tmp/x\0 M wiki/a.md\0';
+  assert.deepEqual(parsePorcelainZ(out), [
+    { status: 'R', path: 'wiki/new é.md' },
+    { status: '??', path: 'tmp/x' },
+    { status: 'M', path: 'wiki/a.md' },
+  ]);
 });

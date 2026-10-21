@@ -119,17 +119,30 @@ export async function createWorktree({ workspaceRoot, runId }) {
 }
 
 export async function worktreeChanges({ worktreePath }) {
-  const { stdout } = await git(['status', '--porcelain', '-uall'], worktreePath);
-  return stdout
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .filter(Boolean)
-    .map((line) => {
-      const code = line.slice(0, 2);
-      const path = line.slice(3).trim();
-      return { status: code.trim(), path };
-    })
+  const { stdout } = await git(['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z', '-uall'], worktreePath);
+  return parsePorcelainZ(stdout)
     .filter((entry) => entry.path && !entry.path.startsWith('.wiki/agent-worktrees/'));
+}
+
+/**
+ * `git status --porcelain -z`: one NUL-terminated record per entry, the path
+ * verbatim. The line form QUOTES any path with a non-ASCII byte, a space or a
+ * quote ("wiki/concepts/points-d-attention-et-\303\251valuation/risque.md"):
+ * read as is, that path no longer started with wiki/, its content read as null,
+ * and the merge refused the proposal as carrying "no mergeable wiki change".
+ * A rename or copy carries its source as the NEXT record, skipped here.
+ */
+export function parsePorcelainZ(stdout) {
+  const records = String(stdout ?? '').split('\0');
+  const entries = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record.length < 4) continue;
+    const code = record.slice(0, 2);
+    entries.push({ status: code.trim(), path: record.slice(3) });
+    if (code[0] === 'R' || code[0] === 'C') index += 1;
+  }
+  return entries;
 }
 
 export async function worktreeDiff({ worktreePath }) {
