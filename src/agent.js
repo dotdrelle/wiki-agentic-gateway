@@ -893,6 +893,11 @@ export function createAgentRunner({
       });
 
       const worktreeToolNames = worktreeState ? GATEWAY_WORKTREE_TOOL_NAMES : [];
+      const reportWorktreePathAlias = ({ from, to }) => onEvent?.({
+        type: 'notice',
+        topic: 'worktree.path-canonicalized',
+        detail: `workspace-rooted file tools mapped ${from} to ${to}; the change is saved in the wiki`,
+      });
       const mcpToolNames = tools.map((entry) => String(entry?.name ?? '')).filter(Boolean);
       // Procedures are loaded per run: the workspace scope moves with the
       // workspace, and a missing base/team scope simply yields nothing.
@@ -977,7 +982,12 @@ export function createAgentRunner({
           name: role,
           systemPrompt: spec.systemPrompt,
           ...(worktreeState && role === 'redactor'
-            ? { backend: createWorktreeBackend({ worktreePath: worktreeState.path }) }
+            ? {
+                backend: createWorktreeBackend({
+                  worktreePath: worktreeState.path,
+                  onPathCanonicalized: reportWorktreePathAlias,
+                }),
+              }
             : {}),
           middleware: [
             createGatewayBoundaryMiddleware({
@@ -1187,7 +1197,10 @@ export function createAgentRunner({
         checkpointer: saver,
         ...(worktreeState
           ? {
-              backend: createWorktreeBackend({ worktreePath: worktreeState.path }),
+              backend: createWorktreeBackend({
+                worktreePath: worktreeState.path,
+                onPathCanonicalized: reportWorktreePathAlias,
+              }),
               allowedExtraToolNames: worktreeToolNames,
             }
           : {}),

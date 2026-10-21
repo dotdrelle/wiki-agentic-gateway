@@ -278,7 +278,7 @@ export async function confineForRead(root, input) {
  * the wrong place. Reads were lexical only, so `ls`/`grep`/`read_file` followed
  * a symlink out of the worktree; `confineForRead` closes that.
  */
-export function createConfinedBackend(inner, { root }) {
+export function createConfinedBackend(inner, { root, onPathCanonicalized = null }) {
   /*
    The harness speaks VIRTUAL absolute paths rooted at the worktree ('/',
    '/wiki/x.md') — the inner backend runs in virtualMode. The wrapper must read
@@ -287,8 +287,22 @@ export function createConfinedBackend(inner, { root }) {
    treated '/' as the host root and refused it ("path escapes the worktree: /"),
    which killed every curate run at its first ls('/').
   */
+  const announcedAliases = new Set();
   const toHost = (input) => {
-    const vpath = typeof input === 'string' && input.length ? input : '/';
+    const requested = typeof input === 'string' && input.length ? input : '/';
+    // Some models treat the workspace root as a parent directory and prepend
+    // `workspace/` to wiki paths. The filesystem tools are already rooted at
+    // the workspace, so that would create `workspace/wiki/...`, which the
+    // wiki merger correctly refuses. Resolve this one unambiguous wiki alias
+    // at the tool boundary; all other paths retain their normal meaning.
+    const vpath = requested.replace(/^\/?workspace\/(?=wiki(?:\/|$))/, '/');
+    if (vpath !== requested) {
+      const alias = `${requested}\0${vpath}`;
+      if (!announcedAliases.has(alias)) {
+        announcedAliases.add(alias);
+        onPathCanonicalized?.({ from: requested, to: vpath });
+      }
+    }
     if (vpath.includes('..') || vpath.startsWith('~')) throw new Error(`path escapes the worktree: ${input}`);
     return resolve(root, vpath.replace(/^\/+/, ''));
   };
@@ -345,10 +359,10 @@ export function createConfinedBackend(inner, { root }) {
   };
 }
 
-export function createWorktreeBackend({ worktreePath }) {
+export function createWorktreeBackend({ worktreePath, onPathCanonicalized = null }) {
   return createConfinedBackend(
     new FilesystemBackend({ rootDir: worktreePath, virtualMode: true }),
-    { root: worktreePath },
+    { root: worktreePath, onPathCanonicalized },
   );
 }
 
