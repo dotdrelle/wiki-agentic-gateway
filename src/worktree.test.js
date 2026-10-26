@@ -289,7 +289,7 @@ test('a curation branch starts from the live wiki when the history is behind, an
 });
 
 test('worktreeChanges keeps an accented or spaced path verbatim (never git-quoted)', async () => {
-  // Observed on juno: "points-d-attention-et-évaluation/risque.md" came back
+  // Observed on a live workspace: "points-d-attention-et-évaluation/risque.md" came back
   // as "\"wiki/…-et-\\303\\251valuation/risque.md\"", so the merge found no
   // wiki change and the proposal blocked every build.
   const accented = 'wiki/concepts/points-d-attention-et-évaluation/risque.md';

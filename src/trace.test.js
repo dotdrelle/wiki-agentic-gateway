@@ -4,11 +4,11 @@ import test from 'node:test';
 import { createRateLimitedWarn, formatGatewayEvent, gatewayTraceMode } from './trace.js';
 
 const ts = '2026-10-16T08:49:06.962Z';
-const run = { runId: 'gateway-mvaq7f5k-4', capability: 'agent.maintain', workspace: 'juno' };
+const run = { runId: 'gateway-mvaq7f5k-4', capability: 'agent.maintain', workspace: 'demo' };
 
 test('a refused maintenance action is an ERROR naming the action and its cause', () => {
   const line = formatGatewayEvent({ type: 'maintenance_result', ts, action: 'curate', target: 'wiki', status: 'failed', error: 'maintenance_capability_unavailable: agent.curate' }, { run });
-  assert.equal(line, `${ts} ERROR run=gateway-mvaq7f5k-4 cap=agent.maintain ws=juno maintenance_result curate target=wiki status=failed — maintenance_capability_unavailable: agent.curate`);
+  assert.equal(line, `${ts} ERROR run=gateway-mvaq7f5k-4 cap=agent.maintain ws=demo maintenance_result curate target=wiki status=failed — maintenance_capability_unavailable: agent.curate`);
 });
 
 test('degraded and role events are traced; heartbeat and tools are not by default', () => {
