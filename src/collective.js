@@ -66,6 +66,7 @@ export const COLLECTIVE_ROLE_SPECS = {
       // does not ask for an impossible one.
       'Name the owner of every finding: curation for a wiki/sources fiche; rebuild for a generated wiki/concepts pivot (missing sources:, missing status, stale or duplicated pivots — ingestion regenerates them, so never ask the Redactor to edit one); editorial for a stable or verified page, which a human decides.',
       'Read only what the handoff does not already quote, in batches of up to 25 paths.',
+      'When the input gives a per-pass limit, retain at most that many curation fiches, the most important first, and list each other finding as one line: [deferred] <path> — <issue>. A later pass takes them up; the Redactor does not.',
       'You never modify anything: you have no write tools.',
     ].join('\n'),
   },
@@ -106,6 +107,8 @@ export const COLLECTIVE_ROLE_SPECS = {
       // The line is a FIELD, like [objection]: the gateway reads it to tell a
       // deliberate no-op from a Redactor that failed to write.
       'If EVERY finding concerns generated wiki/concepts/ pivots — navigation pages ingestion regenerates — write nothing and end with exactly one line: [rebuild-owned] <one sentence naming the pivots a TAXO rebuild fixes>.',
+      'If the handoff retains NO curation finding — the review found nothing to correct in wiki/sources fiches — write nothing and end with exactly one line: [clean] <one sentence saying what was reviewed and found sound>.',
+      'Respect the per-pass limit the input gives: correct the retained findings, never the [deferred] ones. When the gateway refuses a write because the limit is reached, stop writing and list what remains as [deferred] lines.',
     ].join('\n'),
   },
   archivist: {
@@ -165,6 +168,19 @@ export function extractRebuildOwned(content) {
   for (const line of String(content ?? '').split('\n')) {
     const match = /^\s*\[rebuild-owned\]\s*(.*)$/i.exec(line.trim());
     if (match) return match[1].trim() || 'every finding is on a generated pivot a TAXO rebuild regenerates';
+  }
+  return null;
+}
+
+/**
+ * The Redactor's `[clean] <reason>` line: it wrote nothing because the review
+ * retained nothing to correct. An outcome, not a Redactor that failed to
+ * write. Returns the reason, or null when the line is absent.
+ */
+export function extractClean(content) {
+  for (const line of String(content ?? '').split('\n')) {
+    const match = /^\s*\[clean\]\s*(.*)$/i.exec(line.trim());
+    if (match) return match[1].trim() || 'the review found nothing to correct';
   }
   return null;
 }

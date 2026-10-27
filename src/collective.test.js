@@ -8,7 +8,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, tool } from 'langchain';
 import { z } from 'zod';
 import { COLLECTIVE_ROLE_GRAPH, createAgentRunner, dependencyRoles, handoffFor } from './agent.js';
-import { extractCandidates, extractObjections, extractRebuildOwned, extractResolutions } from './collective.js';
+import { extractCandidates, extractClean, extractObjections, extractRebuildOwned, extractResolutions } from './collective.js';
 
 // Scripted model: responses are consumed in order, the last one repeats.
 // FakeListChatModel formats responses as TEXT (tool_calls are dropped), so a
@@ -249,6 +249,50 @@ test('a Redactor that writes nothing on purpose yields a rebuild outcome, not a 
   } finally {
     process.env.GATEWAY_WORKSPACES_ROOT = previous;
   }
+});
+
+test('a Redactor with nothing to correct yields a clean outcome, not a degradation', async () => {
+  const { root } = gitWorkspace('demo');
+  const previous = process.env.GATEWAY_WORKSPACES_ROOT;
+  process.env.GATEWAY_WORKSPACES_ROOT = root;
+  const events = [];
+  const model = new ScriptedChatModel({
+    responses: [
+      'No curation finding: the fiches agree with their sources.',
+      'Nothing to write.\n[clean] the 12 fiches reviewed agree with their sources.',
+      'assembled',
+    ],
+  });
+  try {
+    const runner = createAgentRunner({
+      model: { baseUrl: 'http://x', model: 'openai/gpt-test', apiKey: 'k' },
+      mcpServers: [],
+      toolsOverride: [fakeMcpTool()],
+      worktree: true,
+      roles: ['analyst', 'redactor'],
+      checkpointer: false,
+      runId: 'collective-clean',
+      chatModelOverride: model,
+      onEvent: (event) => events.push(event),
+    });
+    const output = await runner.run({
+      objective: 'curate the workspace',
+      capability: 'agent.curate',
+      systemPrompt: 'You are Donna.',
+      workspace: 'demo',
+    });
+    assert.deepEqual(output.curationOutcome, { kind: 'clean', reason: 'the 12 fiches reviewed agree with their sources.' });
+    assert.ok(!(output.degradations ?? []).some((entry) => entry.role === 'redactor'), 'a clean pass is not a degraded Redactor');
+    assert.ok(events.some((event) => event.type === 'notice' && event.topic === 'curation.clean'), 'the outcome is announced');
+  } finally {
+    process.env.GATEWAY_WORKSPACES_ROOT = previous;
+  }
+});
+
+test('extractClean reads only the tagged line', () => {
+  assert.equal(extractClean('everything looks clean to me'), null);
+  assert.equal(extractClean('done\n[clean] 5 fiches sound'), '5 fiches sound');
+  assert.match(extractClean('[clean]'), /nothing to correct/);
 });
 
 test('extractRebuildOwned reads only the tagged line', () => {

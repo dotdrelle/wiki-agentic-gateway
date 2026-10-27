@@ -11,6 +11,7 @@ import {
   buildGatewayAgent,
   createGatewayBoundaryMiddleware,
   createRoleMeter,
+  curationMaxFilesPerPass,
   roleAllowList,
   resolveMemoryScope,
 } from './agent.js';
@@ -108,6 +109,35 @@ test('the boundary enforces the token budget before the next model call', async 
     boundary.wrapModelCall({ tools: [], messages: [longMessage] }, async (request) => request),
     /token budget exceeded/,
   );
+});
+
+test('the token budget is no default ceiling: only an explicit one stops a role', async () => {
+  const boundary = createGatewayBoundaryMiddleware({ allowedToolNames: [] });
+  const huge = { role: 'user', content: 'x'.repeat(4_000_000) };
+  for (let i = 0; i < 3; i += 1) {
+    await boundary.wrapModelCall({ tools: [], messages: [huge] }, async (request) => request);
+  }
+});
+
+test('a curation pass writes at most its cap of distinct files, rewrites included', async () => {
+  const boundary = createGatewayBoundaryMiddleware({ allowedToolNames: ['write_file', 'edit_file'], maxWrittenFiles: 2 });
+  const write = (name, file_path) => boundary.wrapToolCall(
+    { toolCall: { name, id: file_path, args: { file_path } } },
+    async () => new ToolMessage({ content: 'ok', name, tool_call_id: file_path }),
+  );
+  assert.equal((await write('write_file', '/wiki/sources/a.md')).status, undefined);
+  assert.equal((await write('edit_file', '/wiki/sources/b.md')).status, undefined);
+  // A file already written may be edited again.
+  assert.equal((await write('edit_file', '/wiki/sources/a.md')).status, undefined);
+  const refused = await write('write_file', '/wiki/sources/c.md');
+  assert.equal(refused.status, 'error');
+  assert.match(refused.content, /per-pass limit reached/);
+  assert.match(refused.content, /\[deferred\]/);
+});
+
+test('curationMaxFilesPerPass defaults to 8 and reads its variable', () => {
+  assert.equal(curationMaxFilesPerPass({}), 8);
+  assert.equal(curationMaxFilesPerPass({ GATEWAY_CURATION_MAX_FILES_PER_PASS: '3' }), 3);
 });
 
 test('a budget overrun names the role and what it spent, never a path', async () => {

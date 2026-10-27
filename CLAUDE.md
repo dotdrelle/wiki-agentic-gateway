@@ -51,19 +51,29 @@ workspace is reachable through them — but without the boundary the model is
   producing any proposal. Only an AbortError escapes;
 - `buildGatewayAgent` is the single assembly used by both the runner and the
   contract test, with the backend declared explicitly;
-- ceilings that did not exist: `GATEWAY_RECURSION_LIMIT` (default 200) and
-  `GATEWAY_TOKEN_BUDGET` (default 2 000 000). The budget is a **cumulative
-  per-agent estimate** — each role run and the assembly gets its own
-  accumulator, checked with the harness's counter before every model call, so
-  it is not a shared run-wide cap and a whole-corpus curation may need it
-  raised. Crossing it stops that agent before its next call and is announced
+- ceilings: `GATEWAY_RECURSION_LIMIT` (default 200) and, only when an
+  operator sets it, `GATEWAY_TOKEN_BUDGET` — **no default token ceiling any
+  more**: the former 2 000 000 killed a maintenance curation's Redactor
+  mid-way (juno, 0.16.65), its branch was discarded and the failed curation
+  blocked builds for the day. A curation's work is bounded by the per-pass
+  cap instead (below). When set, the budget is a **cumulative per-agent
+  estimate** — each role run and the assembly gets its own accumulator,
+  checked with the harness's counter before every model call. The meter runs
+  either way. Crossing a set budget stops that agent before its next call and is announced
   (`degraded role:<role>`, or a run failure for a required role/assembly); the
   message names the role and its meter (`createRoleMeter`: model calls,
   estimated tokens, largest call, distinct pages read, re-reads). Every call
   re-sends the thread, so the sum grows with the square of the calls — why the
-  roles read in batches of up to 25 pages.
-  A role that trips the recursion limit hands over a partial result and only
-  fails when it gathered nothing. The 600s task timeout stays.
+  roles read in batches of up to 25 pages. A role that trips the recursion
+  limit hands over a partial result and only fails when it gathered nothing.
+  The 600s task timeout stays;
+- the **per-pass cap**: a worktree curation corrects at most
+  `GATEWAY_CURATION_MAX_FILES_PER_PASS` (default 8) distinct files. The run's
+  input states it, the Analyst retains that many findings and lists the rest
+  as `[deferred] <path> — <issue>`, and the Redactor's boundary refuses a write
+  to a NEW file past the cap (a file already written may be edited again) as a
+  tool error telling it to stop and list what remains. Automatic maintenance
+  chains passes, so a deferred finding is the next pass's work.
 
 `src/frontier.test.js` is the contract: it builds the production wiring with a fake
 model and asserts the visible tool set is exactly the declared MCP pool.
@@ -125,7 +135,10 @@ line per problem, NEVER blocks), **Redactor** (writes the corrections, worktree
 runs only: a `write_file`/`edit_file` is its FIRST action, never an `ls`/`grep`
 re-audit — the handoff is the audit — and it edits `wiki/sources` fiches only,
 leaving generated pivots alone unless the human promotes one; when every
-finding is rebuild-owned it writes nothing and says so), **Archivist** (learned
+finding is rebuild-owned it writes nothing and says so — `[rebuild-owned]` —
+and when the handoff retains no finding it writes nothing and ends on
+`[clean] <reason>`, returned as `curationOutcome: {kind: 'clean'}`, an outcome
+and not a degraded Redactor), **Archivist** (learned
 / obsolete / to re-verify). A capability's `subagents` list selects which roles
 run.
 

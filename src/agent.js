@@ -21,6 +21,7 @@ import {
   extractCandidates,
   extractObjections,
   extractRebuildOwned,
+  extractClean,
   extractResolutions,
 } from './collective.js';
 import { createDossierStore, renderDossierSection } from './dossier.js';
@@ -206,15 +207,19 @@ export function createProcedureReadTool(registry, { role = null, allowedToolName
   );
 }
 
-// Ceilings that did not exist: today only a 600s task timeout bounds a run.
-// recursionLimit caps graph steps; the token budget is estimated before each
-// model call (same counter the harness itself uses) and stops the run before
-// the NEXT call, so a single huge call may overshoot but the loop cannot run
-// away.
+// recursionLimit caps graph steps. The token budget is NOT a default ceiling
+// any more: a 2 M default killed a maintenance curation's Redactor mid-way
+// (juno, 37 calls), the run failed, its branch was thrown away and the failed
+// curation then blocked builds for the day. A role's work is bounded by its
+// handoff instead (the Analyst's per-pass cap, collective.js) and by the
+// recursion limit; the meter still counts what every role spent. An operator
+// may still set GATEWAY_TOKEN_BUDGET explicitly, checked before each model
+// call (same counter the harness itself uses) and stopping the agent before
+// the NEXT call.
 const GATEWAY_RECURSION_LIMIT =
   Number.parseInt(process.env.GATEWAY_RECURSION_LIMIT ?? '', 10) || 200;
 const GATEWAY_TOKEN_BUDGET =
-  Number.parseInt(process.env.GATEWAY_TOKEN_BUDGET ?? '', 10) || 2_000_000;
+  Number.parseInt(process.env.GATEWAY_TOKEN_BUDGET ?? '', 10) || Number.POSITIVE_INFINITY;
 // The main thread is the workspace memory, and every run appends to it. The
 // checkpoint ceiling alone leaves its PROMPT unbounded — one long report is one
 // checkpoint — and a prompt larger than the model context comes back as
@@ -290,14 +295,31 @@ export function describeRoleBudget(label, stats, tokenBudget) {
     + `largest call ${stats.maxCallTokens} tokens; stopped before the next model call`;
 }
 
+// The worktree tools that change a file, and the argument naming it.
+const WRITE_TOOL_NAMES = new Set(['write_file', 'edit_file', 'delete']);
+function writtenPathOf(args) {
+  const value = args?.file_path ?? args?.path;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+// How many distinct files one curation pass may correct. A maintenance
+// curation in auto mode chains passes until the wiki is clean, so a finding
+// left over is picked up by the next pass; a pass that tries to fix
+// everything at once is what ran the Redactor into the ground.
+export function curationMaxFilesPerPass(env = process.env) {
+  return Number.parseInt(env.GATEWAY_CURATION_MAX_FILES_PER_PASS ?? '', 10) || 8;
+}
+
 export function createGatewayBoundaryMiddleware({
   allowedToolNames = [],
   tokenBudget = GATEWAY_TOKEN_BUDGET,
   onModelCall = null,
   label = null,
   meter = createRoleMeter(),
+  maxWrittenFiles = null,
 } = {}) {
   const allowed = new Set(allowedToolNames.map(String));
+  const written = new Set();
   return createMiddleware({
     name: 'GatewayToolBoundary',
     async wrapModelCall(request, handler) {
@@ -331,8 +353,24 @@ export function createGatewayBoundaryMiddleware({
           status: 'error',
         });
       }
+      // The per-pass cap: a file already written may be edited again, a NEW
+      // one beyond the cap is refused as a tool result the model adapts to —
+      // it summarizes what it wrote, the rest goes to the next pass.
+      const writtenPath = WRITE_TOOL_NAMES.has(name) ? writtenPathOf(request?.toolCall?.args) : null;
+      if (writtenPath && Number.isFinite(maxWrittenFiles) && !written.has(writtenPath) && written.size >= maxWrittenFiles) {
+        return new ToolMessage({
+          content:
+            `per-pass limit reached: this curation pass already corrected ${written.size} file(s), the most one pass may change. `
+            + `Do not write ${writtenPath} now: stop writing, summarize what you wrote, and list each remaining correction `
+            + 'as one line "[deferred] <path> — <issue>"; the next pass takes it up.',
+          name,
+          tool_call_id: request.toolCall?.id,
+          status: 'error',
+        });
+      }
       try {
         const result = await handler(request);
+        if (writtenPath && result?.status !== 'error') written.add(writtenPath);
         if (result?.status !== 'error') meter.read(name, request?.toolCall?.args);
         return result;
       } catch (error) {
@@ -911,6 +949,7 @@ export function createAgentRunner({
         })(),
       });
 
+      const maxFilesPerPass = curationMaxFilesPerPass();
       const baseInput = [
         `Capability: ${capability ?? 'unknown'}`,
         `Operation: ${operation ?? 'run'}`,
@@ -921,6 +960,7 @@ export function createAgentRunner({
           ? [
               '',
               `You write on a git branch for this objective. Your file edits land in the workspace review queue as a diff; a human merges them or not. Read the wiki with your MCP tools and correct files with the file tools.`,
+              `Per-pass limit: this pass corrects at most ${maxFilesPerPass} wiki file(s). Retain the most important findings first (blocking objections, contradictions, unsourced claims); every other finding is listed as "[deferred] <path> — <issue>" for the next pass.`,
             ]
           : []),
         ...(dossierSection ? ['', dossierSection] : []),
@@ -994,6 +1034,7 @@ export function createAgentRunner({
               allowedToolNames: roleAllowed,
               label: role,
               meter,
+              ...(worktreeState && role === 'redactor' ? { maxWrittenFiles: maxFilesPerPass } : {}),
               ...(onRoleModelCall
                 ? { onModelCall: (names) => onRoleModelCall(role, names) }
                 : {}),
@@ -1389,9 +1430,18 @@ export function createAgentRunner({
         const rebuildOwned = changes.length === 0 && enabledRoles.includes('redactor')
           ? extractRebuildOwned(roleOutputs.redactor)
           : null;
+        // Or because the review retained nothing to correct: a clean pass is
+        // what ends a chain of automatic maintenance curations, so it must
+        // read as an outcome — as a failure it blocked builds for the day.
+        const clean = !rebuildOwned && changes.length === 0 && enabledRoles.includes('redactor')
+          ? extractClean(roleOutputs.redactor)
+          : null;
         if (rebuildOwned) {
           curationOutcome = { kind: 'rebuild_owned', reason: rebuildOwned };
           onEvent?.({ type: 'notice', topic: 'curation.rebuild-owned', detail: rebuildOwned });
+        } else if (clean) {
+          curationOutcome = { kind: 'clean', reason: clean };
+          onEvent?.({ type: 'notice', topic: 'curation.clean', detail: clean });
         } else if (changes.length === 0 && enabledRoles.includes('redactor')) {
           onEvent?.({
             type: 'degraded',

@@ -100,10 +100,12 @@ Maintenance builds of different templates run in parallel, up to
 
 Ceilings (all optional, defaults in parentheses): `GATEWAY_RECURSION_LIMIT`
 (200) graph steps — a role that trips it hands over a partial result and only
-fails when it gathered nothing; `GATEWAY_TOKEN_BUDGET` (2 000 000) estimated
-tokens — a cumulative per-agent estimate checked before every model call, so a
-whole-corpus curation may need it raised, and crossing it stops that agent
-before its next call, the message naming the role and its counters; `GATEWAY_WORKTREE_MAX_FILES`
+fails when it gathered nothing; `GATEWAY_TOKEN_BUDGET` (no default — unset
+means no token ceiling) estimated tokens — when set, a cumulative per-agent
+estimate checked before every model call, and crossing it stops that agent
+before its next call, the message naming the role and its counters;
+`GATEWAY_CURATION_MAX_FILES_PER_PASS` (8) — the most files one curation pass
+corrects, the rest listed `[deferred]` for the next pass; `GATEWAY_WORKTREE_MAX_FILES`
 (40) / `GATEWAY_WORKTREE_MAX_DIFF_CHARS` (300 000) — beyond them the run fails
 loudly and discards the branch. Memory: `GATEWAY_MEMORY_MAX_CHECKPOINTS` (200)
 and `GATEWAY_MEMORY_MAX_THREAD_CHARS` (400 000) rotate the workspace thread
