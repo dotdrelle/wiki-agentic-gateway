@@ -73,7 +73,12 @@ workspace is reachable through them — but without the boundary the model is
   as `[deferred] <path> — <issue>`, and the Redactor's boundary refuses a write
   to a NEW file past the cap (a file already written may be edited again) as a
   tool error telling it to stop and list what remains. Automatic maintenance
-  chains passes, so a deferred finding is the next pass's work.
+  chains passes, so a deferred finding is the next pass's work. The same
+  boundary confines the Redactor's writes to `wiki/sources/`
+  (`CURATION_WRITABLE_ROOTS`): a write to a generated `wiki/concepts` pivot is
+  refused as a tool error asking for a `[rebuild-owned]` line — the prompt
+  alone did not hold (juno: one unanchored pivot citation got the whole
+  proposal refused at merge).
 
 `src/frontier.test.js` is the contract: it builds the production wiring with a fake
 model and asserts the visible tool set is exactly the declared MCP pool.

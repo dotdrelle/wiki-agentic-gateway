@@ -12,6 +12,7 @@ import {
   createGatewayBoundaryMiddleware,
   createRoleMeter,
   curationMaxFilesPerPass,
+  writableCurationPath,
   roleAllowList,
   resolveMemoryScope,
 } from './agent.js';
@@ -133,6 +134,23 @@ test('a curation pass writes at most its cap of distinct files, rewrites include
   assert.equal(refused.status, 'error');
   assert.match(refused.content, /per-pass limit reached/);
   assert.match(refused.content, /\[deferred\]/);
+});
+
+test('the Redactor writes wiki/sources fiches only: a generated pivot is refused', async () => {
+  const boundary = createGatewayBoundaryMiddleware({ allowedToolNames: ['write_file', 'edit_file'], writableRoots: ['wiki/sources/'] });
+  const write = (file_path) => boundary.wrapToolCall(
+    { toolCall: { name: 'edit_file', id: file_path, args: { file_path } } },
+    async () => new ToolMessage({ content: 'ok', name: 'edit_file', tool_call_id: file_path }),
+  );
+  assert.equal((await write('/wiki/sources/doc/a.md')).status, undefined);
+  const refused = await write('/wiki/concepts/family/tag.md');
+  assert.equal(refused.status, 'error');
+  assert.match(refused.content, /outside wiki\/sources\//);
+  assert.match(refused.content, /\[rebuild-owned\]/);
+  for (const path of ['wiki/index.md', '/wiki/sources/../concepts/x.md', '/wiki/sourcesX/a.md']) {
+    assert.equal(writableCurationPath(path), false, path);
+  }
+  assert.equal(writableCurationPath('/workspaces/demo/wiki/sources/a.md'), true);
 });
 
 test('curationMaxFilesPerPass defaults to 8 and reads its variable', () => {
