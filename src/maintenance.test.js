@@ -5,7 +5,7 @@ import { join } from 'node:path';
 // The runner opens the real checkpointer: keep its memory.sqlite out of the repo.
 process.env.GATEWAY_CONFIG_DIR ??= mkdtempSync(join(tmpdir(), 'gateway-maintenance-test-'));
 import assert from 'node:assert/strict';
-import { maintenanceTools,MAINTENANCE_TOOL_NAMES,createMaintenanceRunner,maintenanceJournal } from './maintenance.js';
+import { maintenanceTools,MAINTENANCE_TOOL_NAMES,createMaintenanceRunner,maintenanceJournal,maintenanceSystemPrompt } from './maintenance.js';
 import { createGatewayBoundaryMiddleware,buildGatewayAgent } from './agent.js';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { AIMessage } from 'langchain';
@@ -65,4 +65,9 @@ test('several templates are built in parallel in one maintenance_build call',asy
   // One template still works as before.
   const single=JSON.parse(await tools.find(t=>t.name==='maintenance_build').invoke({target:'templates/e.md'}));
   assert.equal(single.status,'done');
+});
+test('a maintenance cycle asks its report to open on what the user must do',()=>{
+  // juno: the cycle report read "completed" while builds waited on a proposal.
+  assert.match(maintenanceSystemPrompt(),/quoted "In brief" block of at most three lines/);
+  assert.match(maintenanceSystemPrompt(),/When something waits on the user, the In brief block says so first/);
 });
